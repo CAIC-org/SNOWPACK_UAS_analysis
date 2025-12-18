@@ -1,0 +1,80 @@
+# =============================================================================
+# UAS Snow Depth Correction Workflow - Configuration
+# =============================================================================
+
+# -------- Correction Thresholds --------
+
+thresholds:
+  # Tier 1: Max RMSE (m) to accept PPK-only (no correction)
+  tier1_rmse_max: 0.175
+
+  # Tier 2: Minimum improvement to accept vertical shift correction as final version
+  # 0.30 = require 30% improvement over Tier 1
+  tier2_improvement_min: 0.30
+
+# -------- Validation Settings --------
+
+validation:
+  # Enable bootstrap uncertainty estimation
+  run_bootstrap: true
+
+  # Number of bootstrap iterations
+  bootstrap_iterations: 250
+
+  # Enable Leave-One-Out cross-validation
+  run_loo: true
+
+# -------- Coordinate Reference Systems --------
+
+crs:
+  # Horizontal CRS - NAD83(2011) / UTM zone 13N (meter)
+  horizontal: "EPSG:6342"
+
+  # Vertical CRS - NAVD88 height (meter)
+  vertical: "EPSG:5703"
+
+# -------- File Paths --------
+
+paths:
+  # Area of Interest name -- this is used for folder organization
+  aoi_name: "Professor"
+
+  # Bare-ground DSM filename
+  # Should be in: data/{aoi_name}/bareGround/
+  # Format: YYMMDD_AOI_Ground-DSM.tif
+  bare_ground_file: "241115_SiteA_Ground-DSM.tif"
+
+  # vGCP shapefile filename
+  # Should be in: data/{aoi_name}/vGCP/
+  # Must have fields: E (X), N (Y), Elevation (Z)
+  vgcp_file: "SiteA_vGCP.shp"
+
+  # ---- SINGLE FILE MODE: Specify one snow-on DSM ----
+  # Format: YYMMDD_AOI-DSM.tif
+  # Should be in: data/{aoi_name}/snowOn/
+  snow_on_file: "241201_SiteA-DSM.tif"
+
+  # ---- BATCH MODE: Process all DSMs in folder ----
+  # Leave empty ("") to use single file mode
+  # Set to folder path to process all .tif/.tiff files
+  # Example: "." to process all files in data/{aoi_name}/snowOn/
+  snow_on_folder: ""
+#
+# End of config.yaml
+
+# -------- Usage Notes --------
+
+# Single file mode:
+#   - Set snow_on_file to filename
+#   - Leave snow_on_folder empty
+#   - Run: python uas_snow_correction.py --config config.yaml
+#
+# Batch mode (option 1 - config file):
+#   - Leave snow_on_file empty or set to any value (it will be ignored)
+#   - Set snow_on_folder to folder path or "."
+#   - Run: python uas_snow_correction.py --config config.yaml
+#
+# Batch mode (option 2 - command line):
+#   - Keep snow_on_file set (will be ignored)
+#   - Leave snow_on_folder empty
+#   - Run: python uas_snow_correction.py --config config.yaml --batch

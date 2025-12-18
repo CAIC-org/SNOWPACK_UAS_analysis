@@ -1,0 +1,19 @@
+# Conda environment for SNOWPACK_UAS_analysis
+# Create with: conda env create -f environment.yml
+# Activate with: conda activate uas_HS
+
+name: uas_HS
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.9
+  - gdal
+  - rasterio
+  - geopandas
+  - numpy
+  - pandas
+  - matplotlib
+  - seaborn
+  - pyyaml

@@ -1,0 +1,927 @@
+"""
+UAS Snow Height Correction Workflow
+
+Author: Valerie Foley
+Last Updated: 12/17/2025
+
+"""
+
+import os
+import sys
+import yaml
+import argparse
+from pathlib import Path
+from glob import glob
+import logging
+
+import rasterio
+from rasterio.transform import rowcol, xy
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+def setup_logging(verbose=False):
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
+
+def load_config(config_path):
+
+    # Convert to Path object for easier handling
+    config_path = Path(config_path)
+
+    # Check if file exists
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    # Load YAML file
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Validate required sections
+    required = ['thresholds', 'validation', 'crs', 'paths']
+    for key in required:
+        if key not in config:
+            raise ValueError(f"Missing required config section: {key}")
+
+    logging.info(f"Loaded config: {config_path}")
+    return config
+
+
+def parse_args():
+
+    parser = argparse.ArgumentParser(
+        description='UAS Snow Depth Correction Workflow',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Single file mode
+  python uas_snow_correction.py --config config.yaml
+
+  # Batch mode
+  python uas_snow_correction.py --config config.yaml --batch
+
+  # Fast mode (no bootstrap)
+  python uas_snow_correction.py --config config.yaml --no-bootstrap
+
+  # Verbose output
+  python uas_snow_correction.py --config config.yaml --verbose
+        """
+    )
+
+    parser.add_argument('--config', required=True, help='Path to config YAML file')
+    parser.add_argument('--batch', action='store_true', help='Batch process entire folder')
+    parser.add_argument('--no-bootstrap', action='store_true', help='Skip bootstrap validation')
+    parser.add_argument('--aoi', default=None, help='Override AOI name from config')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
+
+    return parser.parse_args()
+
+
+def create_folders(base_path, aoi_name):
+
+    # Define folder structure
+    folders = {
+        'data_vgcp': base_path / 'data' / aoi_name / 'vGCP',
+        'data_bare': base_path / 'data' / aoi_name / 'bareGround',
+        'data_snow': base_path / 'data' / aoi_name / 'snowOn',
+        'output_corrected': base_path / 'outputs' / aoi_name / 'corrected',
+        'output_statistics': base_path / 'outputs' / aoi_name / 'statistics',
+        'output_plots': base_path / 'outputs' / aoi_name / 'plots'
+    }
+
+    # Create each folder if it doesn't exist
+    for folder in folders.values():
+        folder.mkdir(parents=True, exist_ok=True)
+
+    return folders
+
+
+def load_raster(path):
+
+    with rasterio.open(path) as src:
+        # Read first band
+        data = src.read(1)
+
+        # Extract metadata
+        meta = {
+            'transform': src.transform,
+            'crs': src.crs,
+            'nodata': src.nodata,
+            'shape': data.shape,
+            'dtype': data.dtype
+        }
+
+    logging.debug(f"Loaded raster: {Path(path).name}")
+    return data, meta
+
+
+def load_vgcp(path):
+
+    # Load shapefile
+    gdf = gpd.read_file(path)
+
+    # Check for required fields
+    required = ['E', 'N', 'Elevation']
+    missing = [f for f in required if f not in gdf.columns]
+
+    if missing:
+        raise ValueError(f"vGCP shapefile missing required fields: {missing}")
+
+    logging.info(f"Loaded {len(gdf)} vGCP points from {Path(path).name}")
+    return gdf
+
+
+def extract_at_points(raster_data, transform, coords):
+
+    values = np.full(len(coords), np.nan)
+
+    # Loop through each coordinate point
+    for i, (x, y) in enumerate(coords):
+        # Convert XY to row/col
+        row, col = rowcol(transform, x, y)
+
+        # Check if point is within raster bounds
+        if 0 <= row < raster_data.shape[0] and 0 <= col < raster_data.shape[1]:
+            values[i] = raster_data[row, col]
+        else:
+            logging.warning(f"Point {i+1} outside raster bounds")
+
+    return values
+
+
+def validate_crs(raster_path, shp_path, expected_h, expected_v):
+
+    # Extract expected EPSG code from string
+    expected_epsg = int(expected_h.split(':')[1])
+
+    # Check raster CRS
+    with rasterio.open(raster_path) as src:
+        if src.crs is None:
+            return False, f"Raster has undefined CRS: {raster_path}"
+
+        if src.crs.to_epsg() != expected_epsg:
+            return False, f"Raster CRS mismatch: expected {expected_h}, got EPSG:{src.crs.to_epsg()}"
+
+    # Check shapefile CRS
+    gdf = gpd.read_file(shp_path)
+    if gdf.crs is None:
+        return False, f"Shapefile has undefined CRS: {shp_path}"
+
+    if gdf.crs.to_epsg() != expected_epsg:
+        return False, f"Shapefile CRS mismatch: expected {expected_h}, got EPSG:{gdf.crs.to_epsg()}"
+
+    # All checks passed
+    return True, ""
+
+
+def calc_stats(residuals):
+
+    # Remove NaN values
+    valid = residuals[~np.isnan(residuals)]
+
+    if len(valid) == 0:
+        raise ValueError("No valid residuals found")
+
+    # Calculate basic statistics
+    stats = {
+        'n': len(valid),
+        'ME': float(np.mean(valid)),
+        'RMSE': float(np.sqrt(np.mean(valid**2))),
+        'MAE': float(np.mean(np.abs(valid))),
+        'StdDev': float(np.std(valid, ddof=1)),
+        'Min': float(np.min(valid)),
+        'Max': float(np.max(valid))
+    }
+
+    # Calculate NMAD (robust statistic)
+    median_val = np.median(valid)
+    mad = np.median(np.abs(valid - median_val))
+    stats['NMAD'] = float(1.4826 * mad)
+
+    return stats
+
+
+def apply_vertical_shift(data, me, nodata=None):
+
+    # Create copy to avoid modifying original
+    corrected = data.copy()
+
+    if nodata is not None:
+        # Only correct valid data (not nodata pixels)
+        mask = corrected != nodata
+        corrected[mask] = corrected[mask] - me
+    else:
+        # Correct all pixels
+        corrected = corrected - me
+
+    return corrected
+
+
+def fit_plane(vgcp_df):
+
+    # Remove any NaN values
+    valid = vgcp_df.dropna(subset=['E', 'N', 'Residual'])
+
+    if len(valid) < 3:
+        raise ValueError(f"Need at least 3 valid vGCPs for plane fit, only have {len(valid)}")
+
+    # Build design matrix: Residual = a*E + b*N + c
+    X = np.column_stack([
+        valid['E'].values,      # Easting coordinates
+        valid['N'].values,      # Northing coordinates
+        np.ones(len(valid))     # Intercept term
+    ])
+
+    y = valid['Residual'].values
+
+    # Solve least squares: minimize ||y - X*coeffs||^2
+    coeffs, residuals, rank, singular_values = np.linalg.lstsq(X, y, rcond=None)
+
+    a, b, c = coeffs
+
+    logging.info(f"Plane fit: a={a:.8f} m/m, b={b:.8f} m/m, c={c:.4f} m")
+
+    return a, b, c
+
+
+def create_correction_surface(shape, transform, a, b, c):
+
+    rows, cols = shape
+    correction = np.zeros((rows, cols))
+
+    # Loop through each pixel
+    for row in range(rows):
+        for col in range(cols):
+            # Convert row/col to X/Y coordinates
+            x, y = xy(transform, row, col)
+
+            # Calculate correction at this location
+            correction[row, col] = a * x + b * y + c
+
+    return correction
+
+
+def apply_plane_correction(data, correction_surface, nodata=None):
+
+    # Create copy to avoid modifying original
+    corrected = data.copy()
+
+    if nodata is not None:
+        # Only correct valid data pixels
+        mask = corrected != nodata
+        corrected[mask] = corrected[mask] - correction_surface[mask]
+    else:
+        # Correct all pixels
+        corrected = corrected - correction_surface
+
+    return corrected
+
+
+def loo_validation(vgcp_df, snow_data, snow_meta, tier, tier2_me=None, tier3_coeffs=None):
+
+    # Remove any NaN values
+    valid = vgcp_df.dropna(subset=['E', 'N', 'Residual']).copy()
+    n = len(valid)
+
+    # Array to store LOO residuals
+    loo_res = np.zeros(n)
+
+    # Loop through each vGCP
+    for i in range(n):
+        # Create training set (all points except i)
+        train = valid[valid.index != valid.index[i]]
+
+        # Get test point
+        test_point = valid.iloc[i]
+        coords = np.array([[test_point['E'], test_point['N']]])
+
+        # Apply correction based on tier
+        if tier == 'Tier1':
+            # No correction - just use original residual
+            loo_res[i] = test_point['Residual']
+
+        elif tier == 'Tier2':
+            # Recalculate ME using training set
+            train_me = train['Residual'].mean()
+
+            # Apply vertical shift correction
+            corrected = apply_vertical_shift(snow_data, train_me, snow_meta['nodata'])
+
+            # Extract corrected value at test point
+            z_corr = extract_at_points(corrected, snow_meta['transform'], coords)[0]
+
+            # Calculate LOO residual
+            loo_res[i] = z_corr - test_point['Z_bare']
+
+        elif tier == 'Tier3':
+            # Refit plane using training set
+            a, b, c = fit_plane(train)
+
+            # Create correction surface
+            surf = create_correction_surface(snow_meta['shape'], snow_meta['transform'], a, b, c)
+
+            # Apply plane correction
+            corrected = apply_plane_correction(snow_data, surf, snow_meta['nodata'])
+
+            # Extract corrected value at test point
+            z_corr = extract_at_points(corrected, snow_meta['transform'], coords)[0]
+
+            # Calculate LOO residual
+            loo_res[i] = z_corr - test_point['Z_bare']
+
+    # Calculate statistics on LOO residuals
+    loo_stats = calc_stats(loo_res)
+    logging.info(f"LOO RMSE: {loo_stats['RMSE']:.4f} m")
+
+    return loo_stats
+
+
+def bootstrap_uncertainty(vgcp_df, snow_data, snow_meta, tier, n_iter=250,
+                         tier2_me=None, tier3_coeffs=None):
+
+    # Set random seed for reproducibility
+    np.random.seed(42)
+
+    # Remove NaN values
+    valid = vgcp_df.dropna(subset=['E', 'N', 'Residual']).copy()
+    n = len(valid)
+
+    # Array to store bootstrap RMSE values
+    boot_rmse = np.zeros(n_iter)
+
+    # Perform bootstrap iterations
+    for i in range(n_iter):
+        # Resample with replacement
+        sample = valid.sample(n=n, replace=True).reset_index(drop=True)
+
+        # Apply correction based on tier
+        if tier == 'Tier1':
+            # No correction - just calculate RMSE
+            boot_rmse[i] = np.sqrt(np.mean(sample['Residual'].values**2))
+
+        elif tier == 'Tier2':
+            # Recalculate ME on bootstrap sample
+            me = sample['Residual'].mean()
+
+            # Apply correction
+            corrected = apply_vertical_shift(snow_data, me, snow_meta['nodata'])
+
+            # Extract values at sample points
+            coords = np.column_stack([sample['E'].values, sample['N'].values])
+            z_corr = extract_at_points(corrected, snow_meta['transform'], coords)
+
+            # Calculate residuals
+            res = z_corr - sample['Z_bare'].values
+            boot_rmse[i] = np.sqrt(np.mean(res**2))
+
+        elif tier == 'Tier3':
+            try:
+                # Refit plane on bootstrap sample
+                a, b, c = fit_plane(sample)
+
+                # Create correction surface
+                surf = create_correction_surface(snow_meta['shape'], snow_meta['transform'], a, b, c)
+
+                # Apply correction
+                corrected = apply_plane_correction(snow_data, surf, snow_meta['nodata'])
+
+                # Extract values at sample points
+                coords = np.column_stack([sample['E'].values, sample['N'].values])
+                z_corr = extract_at_points(corrected, snow_meta['transform'], coords)
+
+                # Calculate residuals
+                res = z_corr - sample['Z_bare'].values
+                boot_rmse[i] = np.sqrt(np.mean(res**2))
+
+            except Exception as e:
+                # If iteration fails (e.g., singular matrix), use NaN
+                boot_rmse[i] = np.nan
+                logging.debug(f"Bootstrap iteration {i+1} failed: {e}")
+
+    # Remove failed iterations
+    valid_samples = boot_rmse[~np.isnan(boot_rmse)]
+
+    # Calculate bootstrap statistics
+    boot_stats = {
+        'mean': float(np.mean(valid_samples)),
+        'std': float(np.std(valid_samples, ddof=1)),
+        'ci_lower': float(np.percentile(valid_samples, 2.5)),
+        'ci_upper': float(np.percentile(valid_samples, 97.5)),
+        'samples': valid_samples
+    }
+
+    logging.info(f"Bootstrap: mean={boot_stats['mean']:.4f}, "
+                f"CI=[{boot_stats['ci_lower']:.4f}, {boot_stats['ci_upper']:.4f}]")
+
+    return boot_stats
+
+def evaluate_tiers(vgcp_df, snow_data, snow_meta, config):
+
+    results = {}
+
+    # Get thresholds from config
+    tier1_rmse_max = config['thresholds']['tier1_rmse_max']
+    tier2_imp_min = config['thresholds']['tier2_improvement_min']
+
+    # -------------------------------------------------------------------------
+    # Tier 1: PPK-only (no correction)
+    # -------------------------------------------------------------------------
+    tier1_stats = calc_stats(vgcp_df['Residual'].values)
+    results['tier1_stats'] = tier1_stats
+
+    logging.info(f"Tier 1 RMSE: {tier1_stats['RMSE']:.4f} m")
+
+    # Check if Tier 1 is acceptable
+    if tier1_stats['RMSE'] <= tier1_rmse_max:
+        results['selected'] = 'Tier1'
+        results['reason'] = f"Tier 1 RMSE ({tier1_stats['RMSE']:.4f}) <= threshold ({tier1_rmse_max:.4f})"
+        logging.info(f"Selected: {results['reason']}")
+        return results
+
+    # -------------------------------------------------------------------------
+    # Tier 2: Vertical shift correction
+    # -------------------------------------------------------------------------
+    # Apply vertical shift (remove bias)
+    tier2_corrected = apply_vertical_shift(snow_data, tier1_stats['ME'], snow_meta['nodata'])
+
+    # Extract corrected values at vGCP locations
+    coords = np.column_stack([vgcp_df['E'].values, vgcp_df['N'].values])
+    z_tier2 = extract_at_points(tier2_corrected, snow_meta['transform'], coords)
+
+    # Calculate residuals for Tier 2
+    tier2_res = z_tier2 - vgcp_df['Z_bare'].values
+    tier2_stats = calc_stats(tier2_res)
+
+    # Store results
+    results['tier2_stats'] = tier2_stats
+    results['tier2_corrected'] = tier2_corrected
+
+    # Calculate improvement percentage
+    tier2_imp = (tier1_stats['RMSE'] - tier2_stats['RMSE']) / tier1_stats['RMSE']
+
+    logging.info(f"Tier 2 RMSE: {tier2_stats['RMSE']:.4f} m ({tier2_imp*100:.1f}% improvement)")
+
+
+    try:
+        # Fit plane to residuals
+        a, b, c = fit_plane(vgcp_df)
+
+        # Create correction surface
+        correction_surf = create_correction_surface(snow_meta['shape'], snow_meta['transform'], a, b, c)
+
+        # Apply plane correction
+        tier3_corrected = apply_plane_correction(snow_data, correction_surf, snow_meta['nodata'])
+
+        # Extract corrected values at vGCP locations
+        z_tier3 = extract_at_points(tier3_corrected, snow_meta['transform'], coords)
+
+        # Calculate residuals for Tier 3
+        tier3_res = z_tier3 - vgcp_df['Z_bare'].values
+        tier3_stats = calc_stats(tier3_res)
+
+        # Store results
+        results['tier3_stats'] = tier3_stats
+        results['tier3_corrected'] = tier3_corrected
+        results['tier3_coeffs'] = (a, b, c)
+
+        logging.info(f"Tier 3 RMSE: {tier3_stats['RMSE']:.4f} m")
+
+    except Exception as e:
+        # Tier 3 failed (e.g., not enough points for plane fit)
+        logging.warning(f"Tier 3 failed: {e}")
+        results['tier3_stats'] = None
+
+    if tier2_imp < tier2_imp_min:
+        # Tier 2 doesn't meet improvement threshold
+        if results.get('tier3_stats') and tier3_stats['RMSE'] < tier2_stats['RMSE']:
+            results['selected'] = 'Tier3'
+            results['reason'] = f"Tier 2 improvement ({tier2_imp*100:.1f}%) < threshold, Tier 3 better"
+        else:
+            results['selected'] = 'Tier1'
+            results['reason'] = "No tier met improvement criteria"
+
+    else:
+        # Tier 2 meets improvement threshold
+        if results.get('tier3_stats'):
+            # Compare Tier 2 and Tier 3
+            tier3_vs_tier2 = (tier2_stats['RMSE'] - tier3_stats['RMSE']) / tier2_stats['RMSE']
+            rmse_diff = tier2_stats['RMSE'] - tier3_stats['RMSE']
+
+            # Tier 3 meaningfully better if >5% improvement OR >0.05m RMSE reduction
+            if tier3_stats['RMSE'] < tier2_stats['RMSE'] and (tier3_vs_tier2 > 0.05 or rmse_diff > 0.05):
+                results['selected'] = 'Tier3'
+                results['reason'] = f"Tier 3 meaningfully better than Tier 2 ({tier3_vs_tier2*100:.1f}% improvement)"
+            else:
+                results['selected'] = 'Tier2'
+                results['reason'] = f"Tier 2 meets threshold ({tier2_imp*100:.1f}%), Tier 3 not meaningfully better"
+        else:
+            results['selected'] = 'Tier2'
+            results['reason'] = f"Tier 2 meets threshold ({tier2_imp*100:.1f}%)"
+
+    logging.info(f"Selected: {results['selected']} - {results['reason']}")
+
+    return results
+
+
+def generate_filename(input_name, tier, suffix='DSM'):
+
+    # Map tiers to codes
+    tier_codes = {'Tier1': 'noCorr', 'Tier2': 'VSC', 'Tier3': 'PTC'}
+
+    # Parse input filename
+    stem = Path(input_name).stem
+    ext = Path(input_name).suffix
+
+    # Remove trailing -DSM if present
+    if stem.endswith('-DSM'):
+        stem = stem[:-4]
+
+    # Construct output filename
+    output_name = f"{stem}_{tier_codes[tier]}_{suffix}{ext}"
+
+    return output_name
+
+
+def save_raster(data, meta, path):
+
+    # Ensure output directory exists
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    # Write raster
+    with rasterio.open(
+        path, 'w',
+        driver='GTiff',
+        height=data.shape[0],
+        width=data.shape[1],
+        count=1,
+        dtype=data.dtype,
+        crs=meta['crs'],
+        transform=meta['transform'],
+        nodata=meta['nodata'],
+        compress='LZW'
+    ) as dst:
+        dst.write(data, 1)
+
+    logging.info(f"Saved: {Path(path).name}")
+
+
+def calc_snow_depth(snow_corrected, bare, nodata=None):
+
+    # Calculate snow depth
+    depth = snow_corrected - bare
+
+    # Handle nodata
+    if nodata is not None:
+        # Identify nodata pixels
+        mask = (snow_corrected == nodata) | (bare == nodata)
+        depth[mask] = nodata
+
+        # Set negative depths to zero (only for valid data)
+        depth[(~mask) & (depth < 0)] = 0
+    else:
+        # No nodata - just set negatives to zero
+        depth[depth < 0] = 0
+
+    return depth
+
+
+def create_stats_csv(config, results, validation, snow_filename, output_path):
+
+    # Initialize data dictionary
+    data = {
+        'DSM': snow_filename,
+        'AOI': config['paths']['aoi_name'],
+        'Selected_Tier': results['selected'],
+        'Reason': results['reason'],
+        'n_vGCPs': results['tier1_stats']['n']
+    }
+
+    # Add statistics for each tier
+    for tier_name in ['tier1', 'tier2', 'tier3']:
+        if f'{tier_name}_stats' in results and results[f'{tier_name}_stats']:
+            stats = results[f'{tier_name}_stats']
+            prefix = tier_name.replace('tier', 'Tier')
+
+            # Add all statistics
+            data[f'{prefix}_ME'] = stats['ME']
+            data[f'{prefix}_RMSE'] = stats['RMSE']
+            data[f'{prefix}_NMAD'] = stats['NMAD']
+            data[f'{prefix}_MAE'] = stats['MAE']
+
+    # Add LOO validation statistics
+    if validation.get('loo'):
+        data['LOO_RMSE'] = validation['loo']['RMSE']
+        data['LOO_ME'] = validation['loo']['ME']
+
+    # Add bootstrap statistics
+    if validation.get('bootstrap'):
+        data['Bootstrap_Mean'] = validation['bootstrap']['mean']
+        data['Bootstrap_CI_Lower'] = validation['bootstrap']['ci_lower']
+        data['Bootstrap_CI_Upper'] = validation['bootstrap']['ci_upper']
+
+    # Convert to DataFrame and save
+    df = pd.DataFrame([data])
+    df.to_csv(output_path, index=False, float_format='%.6f')
+
+    logging.info(f"Saved stats: {Path(output_path).name}")
+
+
+def create_plots(vgcp_df, results, validation, output_dir, filename):
+
+    # Set plotting style
+    sns.set_style("whitegrid")
+
+    # Get base filename
+    base = Path(filename).stem
+    selected = results['selected']
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Tier 1 (before correction)
+    tier1_res = vgcp_df['Residual'].dropna().values
+    ax1.bar(range(len(tier1_res)), tier1_res, color='coral', edgecolor='black', alpha=0.7)
+    ax1.axhline(0, color='red', linestyle='--', lw=2)
+    ax1.set_xlabel('vGCP Index')
+    ax1.set_ylabel('Residual (m)')
+    ax1.set_title(f'Tier 1 (PPK-only): RMSE = {results["tier1_stats"]["RMSE"]:.4f} m')
+    ax1.grid(alpha=0.3)
+
+    # Selected tier (after correction)
+    if validation.get('loo'):
+        # Use LOO residuals for plotting
+        selected_res = validation['loo_residuals']
+        selected_rmse = results[f'{selected.lower()}_stats']['RMSE']
+
+        ax2.bar(range(len(selected_res)), selected_res, color='skyblue', edgecolor='black', alpha=0.7)
+        ax2.axhline(0, color='red', linestyle='--', lw=2)
+        ax2.set_xlabel('vGCP Index')
+        ax2.set_ylabel('Residual (m)')
+        ax2.set_title(f'{selected}: RMSE = {selected_rmse:.4f} m')
+        ax2.grid(alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(Path(output_dir) / f'{base}_residuals.png', dpi=300)
+    plt.close()
+
+    if validation.get('bootstrap'):
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        boot = validation['bootstrap']
+
+        # Histogram
+        ax.hist(boot['samples'], bins=30, color='steelblue',
+               edgecolor='black', alpha=0.7, density=True)
+
+        # Add lines for mean and CI
+        ax.axvline(boot['mean'], color='red', linestyle='--', lw=2,
+                  label=f"Mean = {boot['mean']:.4f} m")
+        ax.axvline(boot['ci_lower'], color='orange', linestyle=':', lw=2, label='95% CI')
+        ax.axvline(boot['ci_upper'], color='orange', linestyle=':', lw=2)
+
+        ax.set_xlabel('RMSE (m)')
+        ax.set_ylabel('Density')
+        ax.set_title(f'Bootstrap RMSE Distribution ({selected})')
+        ax.legend()
+        ax.grid(alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(Path(output_dir) / f'{base}_bootstrap.png', dpi=300)
+        plt.close()
+
+    logging.info(f"Saved plots: {base}_*.png")
+
+
+def process_single_dsm(config, folders, snow_file):
+
+    logging.info("="*70)
+    logging.info(f"Processing: {snow_file}")
+    logging.info("="*70)
+
+    bare_path = folders['data_bare'] / config['paths']['bare_ground_file']
+    vgcp_path = folders['data_vgcp'] / config['paths']['vgcp_file']
+    snow_path = folders['data_snow'] / snow_file
+
+    logging.info("Loading data...")
+    bare_data, bare_meta = load_raster(str(bare_path))
+    snow_data, snow_meta = load_raster(str(snow_path))
+    vgcp_gdf = load_vgcp(str(vgcp_path))
+
+    is_valid, msg = validate_crs(str(snow_path), str(vgcp_path),
+                                  config['crs']['horizontal'], config['crs']['vertical'])
+    if not is_valid:
+        raise ValueError(f"CRS validation failed: {msg}")
+
+    logging.info("Extracting values at vGCP locations...")
+    coords = np.column_stack([vgcp_gdf['E'].values, vgcp_gdf['N'].values])
+    snow_z = extract_at_points(snow_data, snow_meta['transform'], coords)
+
+    # Build DataFrame with all vGCP data
+    vgcp_df = pd.DataFrame({
+        'E': vgcp_gdf['E'].values,
+        'N': vgcp_gdf['N'].values,
+        'Z_bare': vgcp_gdf['Elevation'].values,
+        'Z_snow': snow_z,
+        'Residual': snow_z - vgcp_gdf['Elevation'].values
+    })
+
+    logging.info("Evaluating correction tiers...")
+    results = evaluate_tiers(vgcp_df, snow_data, snow_meta, config)
+
+    # Get corrected DSM based on selected tier
+    selected = results['selected']
+    if selected == 'Tier1':
+        corrected_dsm = snow_data.copy()
+    elif selected == 'Tier2':
+        corrected_dsm = results['tier2_corrected']
+    else:  # Tier3
+        corrected_dsm = results['tier3_corrected']
+
+    logging.info("Running validation...")
+    validation = {}
+
+    # Prepare parameters for validation
+    tier2_me = results['tier1_stats']['ME'] if selected == 'Tier2' else None
+    tier3_coeffs = results.get('tier3_coeffs') if selected == 'Tier3' else None
+
+    # LOO validation
+    loo_stats = loo_validation(vgcp_df, snow_data, snow_meta, selected, tier2_me, tier3_coeffs)
+    validation['loo'] = loo_stats
+    validation['loo_residuals'] = loo_stats  # For plotting
+
+    # Bootstrap validation
+    if config['validation']['run_bootstrap']:
+        boot_stats = bootstrap_uncertainty(
+            vgcp_df, snow_data, snow_meta, selected,
+            config['validation']['bootstrap_iterations'],
+            tier2_me, tier3_coeffs
+        )
+        validation['bootstrap'] = boot_stats
+
+    logging.info("Saving outputs...")
+
+    # Save corrected DSM
+    output_name = generate_filename(snow_file, selected, 'DSM')
+    save_raster(corrected_dsm, snow_meta, str(folders['output_corrected'] / output_name))
+
+    # Calculate and save snow depth
+    depth_name = generate_filename(snow_file, selected, 'snowDepth')
+    snow_depth = calc_snow_depth(corrected_dsm, bare_data, snow_meta['nodata'])
+    save_raster(snow_depth, snow_meta, str(folders['output_corrected'] / depth_name))
+
+    # Save statistics CSV
+    stats_name = Path(snow_file).stem + '_statistics.csv'
+    create_stats_csv(config, results, validation, snow_file,
+                    str(folders['output_statistics'] / stats_name))
+
+    # Create plots
+    create_plots(vgcp_df, results, validation, folders['output_plots'], snow_file)
+
+    logging.info(f"Completed: {snow_file}")
+
+    return results
+
+
+def get_snow_dsms(snow_path):
+
+    snow_path = Path(snow_path)
+
+    if snow_path.is_file():
+        # Single file mode
+        return [snow_path.name], snow_path.parent
+
+    elif snow_path.is_dir():
+        # Batch mode - find all .tif and .tiff files
+        files = []
+        for ext in ['*.tif', '*.tiff']:
+            files.extend([f.name for f in snow_path.glob(ext)])
+
+        if not files:
+            raise ValueError(f"No .tif/.tiff files found in {snow_path}")
+
+        # Sort for consistent ordering
+        files.sort()
+        logging.info(f"Found {len(files)} DSM file(s) to process")
+
+        return files, snow_path
+
+    else:
+        raise ValueError(f"Invalid path: {snow_path}")
+
+
+def process_batch(config, folders):
+
+    # Determine snow-on DSM files to process
+    snow_input = config['paths'].get('snow_on_file')
+    snow_folder = config['paths'].get('snow_on_folder')
+
+    if snow_input:
+        # Single file specified (even in batch mode)
+        snow_files, _ = get_snow_dsms(folders['data_snow'] / snow_input)
+    elif snow_folder:
+        # Folder specified - process all files
+        snow_files, _ = get_snow_dsms(folders['data_snow'])
+    else:
+        raise ValueError("Must specify either snow_on_file or snow_on_folder in config")
+
+    # Process each DSM
+    batch_results = []
+    for i, snow_file in enumerate(snow_files, 1):
+        logging.info(f"\n{'='*70}")
+        logging.info(f"DSM {i}/{len(snow_files)}: {snow_file}")
+        logging.info(f"{'='*70}")
+
+        try:
+            # Process this DSM
+            result = process_single_dsm(config, folders, snow_file)
+
+            # Store summary info
+            batch_results.append({
+                'file': snow_file,
+                'success': True,
+                'selected': result['selected'],
+                'rmse': result[f"{result['selected'].lower()}_stats"]['RMSE']
+            })
+
+        except Exception as e:
+            # Log error but continue processing
+            logging.error(f"Failed to process {snow_file}: {e}")
+            batch_results.append({
+                'file': snow_file,
+                'success': False,
+                'error': str(e)
+            })
+
+    # Create batch summary CSV
+    summary_df = pd.DataFrame(batch_results)
+    summary_path = folders['output_statistics'] / 'batch_summary.csv'
+    summary_df.to_csv(summary_path, index=False)
+    logging.info(f"\nBatch summary saved: {summary_path}")
+
+    # Print summary
+    success_count = sum(r['success'] for r in batch_results)
+    logging.info(f"\nBatch complete: {success_count}/{len(batch_results)} successful")
+
+    return batch_results
+
+
+
+def main():
+
+    # Parse command line arguments
+    args = parse_args()
+
+    # Setup logging
+    setup_logging(args.verbose)
+
+    try:
+        # Load configuration
+        config = load_config(args.config)
+
+        # Override config with command line arguments
+        if args.aoi:
+            config['paths']['aoi_name'] = args.aoi
+        if args.no_bootstrap:
+            config['validation']['run_bootstrap'] = False
+
+        # Setup folder structure
+        base_path = Path(args.config).parent
+        folders = create_folders(base_path, config['paths']['aoi_name'])
+
+        # Determine processing mode
+        if args.batch or config['paths'].get('snow_on_folder'):
+            # Batch mode - process multiple DSMs
+            logging.info("Running in BATCH mode")
+            process_batch(config, folders)
+        else:
+            # Single file mode
+            logging.info("Running in SINGLE file mode")
+            snow_file = config['paths']['snow_on_file']
+            process_single_dsm(config, folders, snow_file)
+
+        # Success!
+        logging.info("\n" + "="*70)
+        logging.info(" Workflow Complete")
+        logging.info("="*70)
+
+    except Exception as e:
+        # Error handling
+        logging.error(f"\nWorkflow Failed: {e}")
+
+        # Print full traceback if verbose
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,20 @@
+# Python package requirements for SNOWPACK_UAS_analysis
+# Install with: pip install -r requirements.txt
+
+# WARNING: GDAL is very difficult to install via pip on Windows, use conda
+
+rasterio>=1.3.0
+geopandas>=0.12.0
+numpy>=1.21.0
+pandas>=1.5.0
+matplotlib>=3.5.0
+seaborn>=0.12.0
+pyyaml>=6.0
+
+# GDAL - WINDOWS
+# Use conda: conda install -c conda-forge gdal
+#
+# GDAL - LINUX/MAC
+# 1. Install system GDAL first: sudo apt-get install gdal-bin libgdal-dev
+# 2. Check GDAL version: gdalinfo --version
+# 3. Install matching Python GDAL: pip install GDAL==X.X.X --- replace X.X.X with your GDAL version

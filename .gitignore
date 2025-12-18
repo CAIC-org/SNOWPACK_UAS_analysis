@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (large)
+*.tif
+*.tiff
+*.tfw
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.sbn
+*.sbx
+
+# Output files (can be regenerated)
+outputs/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+
+# But DO track example/test data if small
+!examples/**/*.tif
+!examples/**/*.shp
+
+# Keep folder structure
+!data/*/vGCP/.gitkeep
+!data/*/bareGround/.gitkeep
+!data/*/snowOn/.gitkeep
