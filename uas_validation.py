@@ -50,7 +50,6 @@ def setup_logging(verbose=False):
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-
 def parse_args():
     # Parse command line arguments
     # @return argparse.Namespace: Parsed arguments
@@ -144,6 +143,16 @@ def load_vgcp(path):
 
 
 def extract_at_points(data, transform, coords):
+    # Extract raster values at given XY coordinates
+    # @param data (np.ndarray): 2D raster array
+    # @param transform (Affine): Rasterio affine transform
+    # @param coords (np.ndarray): Nx2 array of (X, Y) coordinates
+    # @return np.ndarray: Array of extracted values (NaN if out of bounds)
+    #
+    # note:
+    #   - uses nearest neighbor sampling
+    #   - returns NaN for points outside raster
+
     values = np.full(len(coords), np.nan)
 
     # Extract value at each point
@@ -160,10 +169,23 @@ def extract_at_points(data, transform, coords):
 # -------- STATISTICS --------
 
 def calc_stats(residuals):
+    # Calculate accuracy statistics from residuals
+    # @param residuals (np.ndarray): Array of residual values
+    # @return dict: Dictionary of statistics:
+    #             - n: Number of valid points
+    #             - ME: Mean Error
+    #             - RMSE: Root Mean Square Error
+    #             - MAE: Mean Absolute Error
+    #             - StdDev: Standard deviation
+    #             - Min: Minimum residual
+    #             - Max: Maximum residual
+    #             - NMAD: Normalized Median Absolute Deviation
+
     # Remove NaN values
     valid = residuals[~np.isnan(residuals)]
 
     if len(valid) == 0:
+        # throw error if no valid residuals
         raise ValueError("No valid residuals found")
 
     # Calculate basic statistics
@@ -178,19 +200,33 @@ def calc_stats(residuals):
     }
 
     # Calculate NMAD
+    # NMAD is sensitive to outliers and robust measure of spread (not as useful for small samples)
     median = np.median(valid)
     mad = np.median(np.abs(valid - median))
+    # NMAD = 1.4826 * median(|residuals - median|)
     stats['NMAD'] = float(1.4826 * mad)
 
     return stats
 
 
 def loo_validation(residuals):
+    # Perform Leave-One-Out cross-validation
+    # @param residuals (np.ndarray): Array of residuals
+    # @return dict: LOO statistics (same format as calc_stats)
+    # note:
+    #    For each point:
+    #    1. Remove it from dataset
+    #    2. Calculate mean of remaining points
+    #    3. Predicted correction = mean of remaining
+    #    4. LOO residual = actual - predicted
+    #    essentialy testing how well the mean correction generalizes
+
     # Remove NaN values
     valid = residuals[~np.isnan(residuals)]
     n = len(valid)
 
     if n < 3:
+        # throw error is fewer than 3 valid points
         raise ValueError(f"Need at least 3 valid points for LOO, have {n}")
 
     # Array for LOO residuals
@@ -214,13 +250,13 @@ def loo_validation(residuals):
 def bootstrap_uncertainty(residuals, n_iter=250):
     # Estimate uncertainty using bootstrap resampling
     # @param residuals (np.ndarray): Array of residuals
-    # # @param n_iter (int): Number of bootstrap iterations
-    # # @return dict: Bootstrap statistics
-    #                    - mean: Mean RMSE
-    #                    - std: Standard deviation of RMSE
-    #                    - ci_lower: Lower 95% CI
-    #                    - ci_upper: Upper 95% CI
-    #                    - samples: Array of all RMSE samples
+    # @param n_iter (int): Number of bootstrap iterations
+    # @return dict: Bootstrap statistics
+    #               - mean: Mean RMSE
+    #               - std: Standard deviation of RMSE
+    #               - ci_lower: Lower 95% CI
+    #               - ci_upper: Upper 95% CI
+    #               - samples: Array of all RMSE samples
     # note:
         # For each iteration:
         # 1. Resample with replacement
@@ -271,8 +307,7 @@ def create_plots(residuals, loo_stats, boot_stats, plot_dir, label):
     # @param plot_dir (str): Output directory
     # @param label (str): Label for filenames
     # @return: None
-    # note:
-    #     Creates:
+    # Creates:
     #     1. Residual histogram
     #     2. Bootstrap distribution (if bootstrap was run from the config file)
 
@@ -479,7 +514,7 @@ def validate_batch(bare_path, snow_folder, vgcp_path, bootstrap_iter=0, plot_dir
 
 def main():
     # Main entry point for standalone validation
-    # @param None (uses command line arguments)
+    # @param None (uses command line arguments and use config file)
     # @return: None (exits with status code)
     #
     # note:
