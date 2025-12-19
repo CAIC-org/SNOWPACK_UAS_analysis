@@ -2,10 +2,28 @@
 UAS Snow Height Correction Workflow
 
 Author: Valerie Foley
-Last Updated: 12/17/2025
+Last Updated: 12/18/2025
 
+Description:
+    Automated workflow for correcting systematic errors in UAS-derived snow-on DSMs
+    using virtual Ground Control Points (vGCPs). Implements three-tier correction
+    approach with automatic tier selection, validation, and batch processing.
+
+Three Tiers of Correction:
+    Tier 1: PPK-only (no correction)
+    Tier 2: Vertical Shift Correction (remove mean error) -- general bias correction
+    Tier 3: Planar Trend Correction (fit and remove planar trend) -- spatially variable correction
+
+Usage:
+    - Single File Mode: python uas_snow_correction.py --config config.yaml
+    - Batch Mode: python uas_snow_correction.py --config config.yaml --batch
+    - Fast Mode (no bootstrap): python uas_snow_correction.py --config config.yaml --no-bootstrap
+    - Verbose Output: python uas_snow_correction.py --config config.yaml --verbose
+    - note:
+        - ensure the config file correctly specifies single vs batch by leaving the correct
+        field as empty strings or filling them in (fields: snow_on_file or snow_on_folder)
 """
-
+# --------- Load Libraries --------
 import os
 import sys
 import yaml
@@ -24,6 +42,13 @@ import seaborn as sns
 
 
 def setup_logging(verbose=False):
+    # Configure logging for the workflow
+    # @param verbose: If True, set logging to DEBUG level, otherwise INFO
+    # @returns: None
+    # note:
+    #   - INFO level: Shows major workflow steps
+    #   - DEBUG level: Shows detailed processing information
+
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
@@ -33,12 +58,16 @@ def setup_logging(verbose=False):
 
 
 def load_config(config_path):
+    # Load and validate configuration from YAML file
+    # @param config_path: Path to the YAML config file
+    # @return dict: configuration dictionary with all user defined parameters
 
     # Convert to Path object for easier handling
     config_path = Path(config_path)
 
     # Check if file exists
     if not config_path.exists():
+        # throw error if no config file found
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
     # Load YAML file
@@ -49,6 +78,8 @@ def load_config(config_path):
     required = ['thresholds', 'validation', 'crs', 'paths']
     for key in required:
         if key not in config:
+            # throw error if required config section(s) are missing
+            # requires threshold vlaues, validation, crs, and file/folder paths
             raise ValueError(f"Missing required config section: {key}")
 
     logging.info(f"Loaded config: {config_path}")
@@ -56,6 +87,15 @@ def load_config(config_path):
 
 
 def parse_args():
+    # Parse command-line arguments
+    # @param: None
+    # @return: argparse.Namespace with parsed arguments
+    #     Arguments
+    #          - config: Path to config YAML file
+    #          - batch: Boolean flag to enable batch processing
+    #          - no_bootstrap: Boolean flag to skip bootstrap validation
+    #          - aoi: Optional AOI name override
+    #          - verbose: Boolean flag to enable verbose logging
 
     parser = argparse.ArgumentParser(
         description='UAS Snow Depth Correction Workflow',
@@ -272,18 +312,19 @@ def fit_plane(vgcp_df):
 
 
 def create_correction_surface(shape, transform, a, b, c):
-
     rows, cols = shape
-    correction = np.zeros((rows, cols))
 
-    # Loop through each pixel
-    for row in range(rows):
-        for col in range(cols):
-            # Convert row/col to X/Y coordinates
-            x, y = xy(transform, row, col)
+    # Create meshgrid of all row/col indices (vectorized!)
+    row_indices, col_indices = np.meshgrid(np.arange(rows), np.arange(cols), indexing='ij')
 
-            # Calculate correction at this location
-            correction[row, col] = a * x + b * y + c
+    # Convert ALL indices to X/Y coordinates using affine transform
+    x = transform.c + col_indices * transform.a + row_indices * transform.b
+    y = transform.f + col_indices * transform.d + row_indices * transform.e
+
+    # Calculate correction for ALL pixels at once
+    correction = a * x + b * y + c
+
+    logging.debug(f"Created correction surface: {rows}x{cols} pixels (vectorized)")
 
     return correction
 
@@ -356,11 +397,12 @@ def loo_validation(vgcp_df, snow_data, snow_meta, tier, tier2_me=None, tier3_coe
             # Calculate LOO residual
             loo_res[i] = z_corr - test_point['Z_bare']
 
-    # Calculate statistics on LOO residuals
     loo_stats = calc_stats(loo_res)
     logging.info(f"LOO RMSE: {loo_stats['RMSE']:.4f} m")
 
-    return loo_stats
+    # Return both stats and residuals (residuals needed for plotting)
+    return loo_stats, loo_res  # ← NEW - returns tuple
+
 
 
 def bootstrap_uncertainty(vgcp_df, snow_data, snow_meta, tier, n_iter=250,
@@ -674,9 +716,9 @@ def create_plots(vgcp_df, results, validation, output_dir, filename):
     ax1.grid(alpha=0.3)
 
     # Selected tier (after correction)
-    if validation.get('loo'):
+    if validation.get('loo_residuals') is not None:  # ← Checks for array
         # Use LOO residuals for plotting
-        selected_res = validation['loo_residuals']
+        selected_res = validation['loo_residuals']  # Gets residuals array
         selected_rmse = results[f'{selected.lower()}_stats']['RMSE']
 
         ax2.bar(range(len(selected_res)), selected_res, color='skyblue', edgecolor='black', alpha=0.7)
@@ -774,10 +816,11 @@ def process_single_dsm(config, folders, snow_file):
     tier2_me = results['tier1_stats']['ME'] if selected == 'Tier2' else None
     tier3_coeffs = results.get('tier3_coeffs') if selected == 'Tier3' else None
 
-    # LOO validation
-    loo_stats = loo_validation(vgcp_df, snow_data, snow_meta, selected, tier2_me, tier3_coeffs)
+    # LOO validation (now returns both stats and residuals!)
+    loo_stats, loo_residuals = loo_validation(vgcp_df, snow_data, snow_meta, selected, tier2_me, tier3_coeffs)
     validation['loo'] = loo_stats
-    validation['loo_residuals'] = loo_stats  # For plotting
+    validation['loo_residuals'] = loo_residuals  # ← CORRECT - stores array!
+
 
     # Bootstrap validation
     if config['validation']['run_bootstrap']:
@@ -897,6 +940,8 @@ def process_batch(config, folders):
 
 
 def main():
+    # @param None (args come from command line and config file)
+    # @returns: None (system exit)
 
     # Parse command line arguments
     args = parse_args()
