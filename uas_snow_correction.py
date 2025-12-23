@@ -2,7 +2,7 @@
 UAS Snow Height Correction Workflow
 
 Author: Valerie Foley
-Last Updated: 12/18/2025
+Last Updated: 12/23/2025
 
 Description:
     Automated workflow for correcting systematic errors in UAS-derived snow-on DSMs
@@ -60,7 +60,7 @@ def setup_logging(verbose=False):
 def load_config(config_path):
     # Load and validate configuration from YAML file
     # @param config_path: Path to the YAML config file
-    # @return dict: configuration dictionary with all user defined parameters
+    # @returns: dict - configuration dictionary with all user defined parameters
 
     # Convert to Path object for easier handling
     config_path = Path(config_path)
@@ -79,7 +79,6 @@ def load_config(config_path):
     for key in required:
         if key not in config:
             # throw error if required config section(s) are missing
-            # requires threshold vlaues, validation, crs, and file/folder paths
             raise ValueError(f"Missing required config section: {key}")
 
     logging.info(f"Loaded config: {config_path}")
@@ -89,13 +88,13 @@ def load_config(config_path):
 def parse_args():
     # Parse command-line arguments
     # @param: None
-    # @return: argparse.Namespace with parsed arguments
-    #     Arguments
-    #          - config: Path to config YAML file
-    #          - batch: Boolean flag to enable batch processing
-    #          - no_bootstrap: Boolean flag to skip bootstrap validation
-    #          - aoi: Optional AOI name override
-    #          - verbose: Boolean flag to enable verbose logging
+    # @returns: argparse.Namespace with parsed arguments
+    #     Arguments:
+    #       - config: Path to config YAML file
+    #       - batch: Boolean flag to enable batch processing
+    #       - no_bootstrap: Boolean flag to skip bootstrap validation
+    #       - aoi: Optional AOI name override
+    #       - verbose: Boolean flag to enable verbose logging
 
     parser = argparse.ArgumentParser(
         description='UAS Snow Depth Correction Workflow',
@@ -126,6 +125,10 @@ Examples:
 
 
 def create_folders(base_path, aoi_name):
+    # Create directory structure for data and outputs
+    # @param base_path: Base directory path for the project
+    # @param aoi_name: Name of the Area of Interest
+    # @returns: dict - dictionary containing paths to all created folders
 
     # Define folder structure
     folders = {
@@ -145,6 +148,11 @@ def create_folders(base_path, aoi_name):
 
 
 def load_raster(path):
+    # Load raster file and extract metadata
+    # @param path: Path to raster file
+    # @returns: tuple (data, meta) where:
+    #   - data: 2D numpy array of raster values
+    #   - meta: dict containing transform, crs, nodata, shape, dtype
 
     with rasterio.open(path) as src:
         # Read first band
@@ -164,6 +172,9 @@ def load_raster(path):
 
 
 def load_vgcp(path):
+    # Load virtual Ground Control Points from shapefile
+    # @param path: Path to vGCP shapefile
+    # @returns: GeoDataFrame with E, N, Elevation fields
 
     # Load shapefile
     gdf = gpd.read_file(path)
@@ -173,6 +184,7 @@ def load_vgcp(path):
     missing = [f for f in required if f not in gdf.columns]
 
     if missing:
+        # throw error if required fields are missing from shapefile
         raise ValueError(f"vGCP shapefile missing required fields: {missing}")
 
     logging.info(f"Loaded {len(gdf)} vGCP points from {Path(path).name}")
@@ -180,6 +192,11 @@ def load_vgcp(path):
 
 
 def extract_at_points(raster_data, transform, coords):
+    # Extract raster values at specified coordinate locations
+    # @param raster_data: 2D numpy array of raster values
+    # @param transform: Raster affine transformation
+    # @param coords: Nx2 numpy array of (x, y) coordinates
+    # @returns: numpy array of extracted values (NaN for out-of-bounds points)
 
     values = np.full(len(coords), np.nan)
 
@@ -192,18 +209,29 @@ def extract_at_points(raster_data, transform, coords):
         if 0 <= row < raster_data.shape[0] and 0 <= col < raster_data.shape[1]:
             values[i] = raster_data[row, col]
         else:
+            # log warning for points outside raster bounds
             logging.warning(f"Point {i+1} outside raster bounds")
 
     return values
 
 
 def validate_crs(raster_path, shp_path, expected_h, expected_v):
+    # Validate that raster and shapefile have matching CRS
+    # @param raster_path: Path to raster file
+    # @param shp_path: Path to shapefile
+    # @param expected_h: Expected horizontal CRS (e.g., 'EPSG:6342')
+    # @param expected_v: Expected vertical CRS (not currently validated)
+    # @returns: tuple (success, message) where:
+    #   - success: bool, True if CRS validation passes
+    #   - message: str, error description if validation fails
+
     # Extract expected EPSG code from string
     expected_epsg = int(expected_h.split(':')[1])
 
     # Check raster CRS
     with rasterio.open(raster_path) as src:
         if src.crs is None:
+            # return error if raster has undefined CRS
             return False, f"Raster has undefined CRS: {raster_path}"
 
         # Try to get EPSG code directly
@@ -215,38 +243,54 @@ def validate_crs(raster_path, shp_path, expected_h, expected_v):
             logging.info(f"Compound CRS detected for {Path(raster_path).name}")
 
             # Check if expected EPSG appears in the CRS definition
-            # Your test showed: AUTHORITY["EPSG","6342"]
             epsg_pattern = f'AUTHORITY["EPSG","{expected_epsg}"]'
 
             if epsg_pattern in crs_str:
                 logging.info(f"Found {epsg_pattern} in compound CRS definition")
                 raster_epsg = expected_epsg  # Accept it
             else:
+                # return error if expected EPSG not found in compound CRS
                 return False, f"Expected EPSG:{expected_epsg} not found in compound CRS"
 
         # Verify EPSG matches
         if raster_epsg != expected_epsg:
+            # return error if raster CRS doesn't match expected
             return False, f"Raster CRS mismatch: expected EPSG:{expected_epsg}, got EPSG:{raster_epsg}"
 
     # Check shapefile CRS
     gdf = gpd.read_file(shp_path)
     if gdf.crs is None:
+        # return error if shapefile has undefined CRS
         return False, f"Shapefile has undefined CRS: {shp_path}"
 
     shp_epsg = gdf.crs.to_epsg()
     if shp_epsg != expected_epsg:
+        # return error if shapefile CRS doesn't match expected
         return False, f"Shapefile CRS mismatch: expected EPSG:{expected_epsg}, got EPSG:{shp_epsg}"
 
     # All checks passed
     logging.info(f"CRS validation passed: EPSG:{expected_epsg}")
     return True, ""
 
+
 def calc_stats(residuals):
+    # Calculate accuracy statistics from residuals
+    # @param residuals: numpy array of residual values (measured - truth)
+    # @returns: dict containing statistical metrics:
+    #   - n: Number of valid points
+    #   - ME: Mean Error (bias)
+    #   - RMSE: Root Mean Square Error
+    #   - MAE: Mean Absolute Error
+    #   - StdDev: Standard Deviation
+    #   - Min: Minimum residual
+    #   - Max: Maximum residual
+    #   - NMAD: Normalized Median Absolute Deviation
 
     # Remove NaN values
     valid = residuals[~np.isnan(residuals)]
 
     if len(valid) == 0:
+        # throw error if no valid residuals found
         raise ValueError("No valid residuals found")
 
     # Calculate basic statistics
@@ -269,6 +313,11 @@ def calc_stats(residuals):
 
 
 def apply_vertical_shift(data, me, nodata=None):
+    # Apply vertical shift correction to remove bias
+    # @param data: 2D numpy array of elevation data
+    # @param me: Mean error to subtract (bias correction)
+    # @param nodata: Nodata value to preserve (optional)
+    # @returns: numpy array - corrected elevation data
 
     # Create copy to avoid modifying original
     corrected = data.copy()
@@ -285,11 +334,15 @@ def apply_vertical_shift(data, me, nodata=None):
 
 
 def fit_plane(vgcp_df):
+    # Fit a plane to vGCP residuals using least squares
+    # @param vgcp_df: DataFrame with columns E, N, Residual
+    # @returns: tuple (a, b, c) - plane coefficients where Residual = a*E + b*N + c
 
     # Remove any NaN values
     valid = vgcp_df.dropna(subset=['E', 'N', 'Residual'])
 
     if len(valid) < 3:
+        # throw error if not enough points for plane fit
         raise ValueError(f"Need at least 3 valid vGCPs for plane fit, only have {len(valid)}")
 
     # Build design matrix: Residual = a*E + b*N + c
@@ -312,6 +365,14 @@ def fit_plane(vgcp_df):
 
 
 def create_correction_surface(shape, transform, a, b, c):
+    # Create a correction surface by evaluating plane equation at all pixels
+    # @param shape: Raster dimensions (rows, cols)
+    # @param transform: Raster affine transformation
+    # @param a: Plane coefficient for Easting
+    # @param b: Plane coefficient for Northing
+    # @param c: Plane intercept
+    # @returns: 2D numpy array of correction values
+
     rows, cols = shape
 
     # Create meshgrid of all row/col indices (vectorized!)
@@ -330,6 +391,11 @@ def create_correction_surface(shape, transform, a, b, c):
 
 
 def apply_plane_correction(data, correction_surface, nodata=None):
+    # Apply planar trend correction to elevation data
+    # @param data: 2D numpy array of elevation data
+    # @param correction_surface: 2D numpy array of correction values
+    # @param nodata: Nodata value to preserve (optional)
+    # @returns: numpy array - corrected elevation data
 
     # Create copy to avoid modifying original
     corrected = data.copy()
@@ -346,6 +412,16 @@ def apply_plane_correction(data, correction_surface, nodata=None):
 
 
 def loo_validation(vgcp_df, snow_data, snow_meta, tier, tier2_me=None, tier3_coeffs=None):
+    # Perform Leave-One-Out cross-validation
+    # @param vgcp_df: DataFrame with E, N, Z_bare, Residual columns
+    # @param snow_data: Original snow-on DSM numpy array
+    # @param snow_meta: dict containing raster metadata
+    # @param tier: Selected correction tier ('Tier1', 'Tier2', or 'Tier3')
+    # @param tier2_me: Mean error for Tier2 correction (optional)
+    # @param tier3_coeffs: Plane coefficients (a, b, c) for Tier3 (optional)
+    # @returns: tuple (loo_stats, loo_res) where:
+    #   - loo_stats: dict of statistics
+    #   - loo_res: numpy array of LOO residuals
 
     # Remove any NaN values
     valid = vgcp_df.dropna(subset=['E', 'N', 'Residual']).copy()
@@ -401,12 +477,20 @@ def loo_validation(vgcp_df, snow_data, snow_meta, tier, tier2_me=None, tier3_coe
     logging.info(f"LOO RMSE: {loo_stats['RMSE']:.4f} m")
 
     # Return both stats and residuals (residuals needed for plotting)
-    return loo_stats, loo_res  # ← NEW - returns tuple
-
+    return loo_stats, loo_res
 
 
 def bootstrap_uncertainty(vgcp_df, snow_data, snow_meta, tier, n_iter=250,
                          tier2_me=None, tier3_coeffs=None):
+    # Estimate uncertainty using bootstrap resampling
+    # @param vgcp_df: DataFrame with E, N, Z_bare, Residual columns
+    # @param snow_data: Original snow-on DSM numpy array
+    # @param snow_meta: dict containing raster metadata
+    # @param tier: Selected correction tier ('Tier1', 'Tier2', or 'Tier3')
+    # @param n_iter: Number of bootstrap iterations
+    # @param tier2_me: Mean error for Tier2 correction (optional)
+    # @param tier3_coeffs: Plane coefficients (a, b, c) for Tier3 (optional)
+    # @returns: dict containing bootstrap statistics (mean, std, CI lower/upper, samples)
 
     # Set random seed for reproducibility
     np.random.seed(42)
@@ -465,6 +549,7 @@ def bootstrap_uncertainty(vgcp_df, snow_data, snow_meta, tier, n_iter=250,
             except Exception as e:
                 # If iteration fails (e.g., singular matrix), use NaN
                 boot_rmse[i] = np.nan
+                # log debug message for failed iteration
                 logging.debug(f"Bootstrap iteration {i+1} failed: {e}")
 
     # Remove failed iterations
@@ -484,9 +569,19 @@ def bootstrap_uncertainty(vgcp_df, snow_data, snow_meta, tier, n_iter=250,
 
     return boot_stats
 
+
 def evaluate_tiers(vgcp_df, snow_data, snow_meta, config):
+    # Evaluate all correction tiers and select best approach
+    # @param vgcp_df: DataFrame with E, N, Z_bare, Residual columns
+    # @param snow_data: Original snow-on DSM numpy array
+    # @param snow_meta: dict containing raster metadata
+    # @param config: Configuration dictionary
+    # @returns: dict containing statistics for all tiers and selected tier
 
     results = {}
+
+    # Check if manual mode is enabled
+    manual_mode = config['thresholds'].get('correction_mode', 'auto')
 
     # Get thresholds from config
     tier1_rmse_max = config['thresholds']['tier1_rmse_max']
@@ -500,8 +595,15 @@ def evaluate_tiers(vgcp_df, snow_data, snow_meta, config):
 
     logging.info(f"Tier 1 RMSE: {tier1_stats['RMSE']:.4f} m")
 
-    # Check if Tier 1 is acceptable
-    if tier1_stats['RMSE'] <= tier1_rmse_max:
+    # If manual mode is set to ppk/tier1, use it and return
+    if manual_mode.lower() in ['ppk', 'tier1', 'none']:
+        results['selected'] = 'Tier1'
+        results['reason'] = "Manual mode: PPK-only selected in config"
+        logging.info(f"Selected: {results['reason']}")
+        return results
+
+    # Check if Tier 1 is acceptable (only in auto mode)
+    if manual_mode.lower() == 'auto' and tier1_stats['RMSE'] <= tier1_rmse_max:
         results['selected'] = 'Tier1'
         results['reason'] = f"Tier 1 RMSE ({tier1_stats['RMSE']:.4f}) <= threshold ({tier1_rmse_max:.4f})"
         logging.info(f"Selected: {results['reason']}")
@@ -530,7 +632,16 @@ def evaluate_tiers(vgcp_df, snow_data, snow_meta, config):
 
     logging.info(f"Tier 2 RMSE: {tier2_stats['RMSE']:.4f} m ({tier2_imp*100:.1f}% improvement)")
 
+    # If manual mode is set to vsc/tier2, use it and return
+    if manual_mode.lower() in ['vsc', 'tier2', 'vertical']:
+        results['selected'] = 'Tier2'
+        results['reason'] = "Manual mode: Vertical Shift Correction selected in config"
+        logging.info(f"Selected: {results['reason']}")
+        return results
 
+    # -------------------------------------------------------------------------
+    # Tier 3: Planar trend correction
+    # -------------------------------------------------------------------------
     try:
         # Fit plane to residuals
         a, b, c = fit_plane(vgcp_df)
@@ -557,9 +668,24 @@ def evaluate_tiers(vgcp_df, snow_data, snow_meta, config):
 
     except Exception as e:
         # Tier 3 failed (e.g., not enough points for plane fit)
+        # log warning for tier 3 failure
         logging.warning(f"Tier 3 failed: {e}")
         results['tier3_stats'] = None
 
+    # If manual mode is set to ptc/tier3, use it and return
+    if manual_mode.lower() in ['ptc', 'tier3', 'planar', 'tilt']:
+        if results.get('tier3_stats'):
+            results['selected'] = 'Tier3'
+            results['reason'] = "Manual mode: Planar Trend Correction selected in config"
+        else:
+            results['selected'] = 'Tier2'
+            results['reason'] = "Manual mode requested Tier3 but it failed, using Tier2"
+        logging.info(f"Selected: {results['reason']}")
+        return results
+
+    # -------------------------------------------------------------------------
+    # Auto mode tier selection
+    # -------------------------------------------------------------------------
     if tier2_imp < tier2_imp_min:
         # Tier 2 doesn't meet improvement threshold
         if results.get('tier3_stats') and tier3_stats['RMSE'] < tier2_stats['RMSE']:
@@ -593,6 +719,11 @@ def evaluate_tiers(vgcp_df, snow_data, snow_meta, config):
 
 
 def generate_filename(input_name, tier, suffix='DSM'):
+    # Generate output filename with tier code
+    # @param input_name: Input filename
+    # @param tier: Selected tier ('Tier1', 'Tier2', or 'Tier3')
+    # @param suffix: File suffix (default 'DSM')
+    # @returns: str - generated output filename
 
     # Map tiers to codes
     tier_codes = {'Tier1': 'noCorr', 'Tier2': 'VSC', 'Tier3': 'PTC'}
@@ -612,6 +743,11 @@ def generate_filename(input_name, tier, suffix='DSM'):
 
 
 def save_raster(data, meta, path):
+    # Save raster data to GeoTIFF file
+    # @param data: 2D numpy array of raster values
+    # @param meta: dict containing raster metadata (crs, transform, nodata, etc.)
+    # @param path: Output file path
+    # @returns: None
 
     # Ensure output directory exists
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -635,6 +771,11 @@ def save_raster(data, meta, path):
 
 
 def calc_snow_depth(snow_corrected, bare, nodata=None):
+    # Calculate snow depth from corrected snow-on and bare ground DSMs
+    # @param snow_corrected: Corrected snow-on DSM numpy array
+    # @param bare: Bare ground DSM numpy array
+    # @param nodata: Nodata value to preserve (optional)
+    # @returns: numpy array - snow depth raster (negative depths set to zero)
 
     # Calculate snow depth
     depth = snow_corrected - bare
@@ -655,6 +796,13 @@ def calc_snow_depth(snow_corrected, bare, nodata=None):
 
 
 def create_stats_csv(config, results, validation, snow_filename, output_path):
+    # Create CSV file with statistics summary
+    # @param config: Configuration dictionary
+    # @param results: Tier evaluation results dict
+    # @param validation: Validation statistics dict (LOO, bootstrap)
+    # @param snow_filename: Input snow-on DSM filename
+    # @param output_path: Output CSV file path
+    # @returns: None
 
     # Initialize data dictionary
     data = {
@@ -696,6 +844,13 @@ def create_stats_csv(config, results, validation, snow_filename, output_path):
 
 
 def create_plots(vgcp_df, results, validation, output_dir, filename):
+    # Create visualization plots for correction results
+    # @param vgcp_df: DataFrame with vGCP data
+    # @param results: Tier evaluation results dict
+    # @param validation: Validation statistics dict (LOO, bootstrap)
+    # @param output_dir: Output directory for plots
+    # @param filename: Base filename for plots
+    # @returns: None
 
     # Set plotting style
     sns.set_style("whitegrid")
@@ -704,6 +859,7 @@ def create_plots(vgcp_df, results, validation, output_dir, filename):
     base = Path(filename).stem
     selected = results['selected']
 
+    # Create residual comparison plot
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
     # Tier 1 (before correction)
@@ -716,9 +872,9 @@ def create_plots(vgcp_df, results, validation, output_dir, filename):
     ax1.grid(alpha=0.3)
 
     # Selected tier (after correction)
-    if validation.get('loo_residuals') is not None:  # ← Checks for array
+    if validation.get('loo_residuals') is not None:
         # Use LOO residuals for plotting
-        selected_res = validation['loo_residuals']  # Gets residuals array
+        selected_res = validation['loo_residuals']
         selected_rmse = results[f'{selected.lower()}_stats']['RMSE']
 
         ax2.bar(range(len(selected_res)), selected_res, color='skyblue', edgecolor='black', alpha=0.7)
@@ -732,6 +888,7 @@ def create_plots(vgcp_df, results, validation, output_dir, filename):
     plt.savefig(Path(output_dir) / f'{base}_residuals.png', dpi=300)
     plt.close()
 
+    # Create bootstrap distribution plot (if available)
     if validation.get('bootstrap'):
         fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -761,29 +918,31 @@ def create_plots(vgcp_df, results, validation, output_dir, filename):
 
 
 def process_single_dsm(config, folders, snow_file):
+    # Process a single snow-on DSM file
+    # @param config: Configuration dictionary
+    # @param folders: dict of folder paths
+    # @param snow_file: Snow-on DSM filename
+    # @returns: dict - processing results
 
     logging.info("="*70)
     logging.info(f"Processing: {snow_file}")
     logging.info("="*70)
 
+    # Build file paths
     bare_path = folders['data_bare'] / config['paths']['bare_ground_file']
     vgcp_path = folders['data_vgcp'] / config['paths']['vgcp_file']
     snow_path = folders['data_snow'] / snow_file
 
+    # Load data
     logging.info("Loading data...")
     bare_data, bare_meta = load_raster(str(bare_path))
     snow_data, snow_meta = load_raster(str(snow_path))
     vgcp_gdf = load_vgcp(str(vgcp_path))
 
-    # -------------------------------------------------------------------------
-    # Validate CRS (DISABLED - Using compound CRS from ArcGIS Pro)
-    # -------------------------------------------------------------------------
-    # Note: Compound CRS (NAD83(2011)/UTM 13N + NAVD88) cannot be easily validated
-    # Files verified in ArcGIS Pro to have matching CRS
+    # Note: CRS validation disabled for compound CRS
     logging.info("Skipping CRS validation (compound CRS)")
 
-
-
+    # Extract values at vGCP locations
     logging.info("Extracting values at vGCP locations...")
     coords = np.column_stack([vgcp_gdf['E'].values, vgcp_gdf['N'].values])
     snow_z = extract_at_points(snow_data, snow_meta['transform'], coords)
@@ -797,6 +956,7 @@ def process_single_dsm(config, folders, snow_file):
         'Residual': snow_z - vgcp_gdf['Elevation'].values
     })
 
+    # Evaluate correction tiers
     logging.info("Evaluating correction tiers...")
     results = evaluate_tiers(vgcp_df, snow_data, snow_meta, config)
 
@@ -809,6 +969,7 @@ def process_single_dsm(config, folders, snow_file):
     else:  # Tier3
         corrected_dsm = results['tier3_corrected']
 
+    # Run validation
     logging.info("Running validation...")
     validation = {}
 
@@ -816,11 +977,10 @@ def process_single_dsm(config, folders, snow_file):
     tier2_me = results['tier1_stats']['ME'] if selected == 'Tier2' else None
     tier3_coeffs = results.get('tier3_coeffs') if selected == 'Tier3' else None
 
-    # LOO validation (now returns both stats and residuals!)
+    # LOO validation
     loo_stats, loo_residuals = loo_validation(vgcp_df, snow_data, snow_meta, selected, tier2_me, tier3_coeffs)
     validation['loo'] = loo_stats
-    validation['loo_residuals'] = loo_residuals  # ← CORRECT - stores array!
-
+    validation['loo_residuals'] = loo_residuals
 
     # Bootstrap validation
     if config['validation']['run_bootstrap']:
@@ -831,6 +991,7 @@ def process_single_dsm(config, folders, snow_file):
         )
         validation['bootstrap'] = boot_stats
 
+    # Save outputs
     logging.info("Saving outputs...")
 
     # Save corrected DSM
@@ -838,7 +999,7 @@ def process_single_dsm(config, folders, snow_file):
     save_raster(corrected_dsm, snow_meta, str(folders['output_corrected'] / output_name))
 
     # Calculate and save snow depth
-    depth_name = generate_filename(snow_file, selected, 'snowDepth')
+    depth_name = generate_filename(snow_file, selected, 'snowHeight')
     snow_depth = calc_snow_depth(corrected_dsm, bare_data, snow_meta['nodata'])
     save_raster(snow_depth, snow_meta, str(folders['output_corrected'] / depth_name))
 
@@ -856,6 +1017,11 @@ def process_single_dsm(config, folders, snow_file):
 
 
 def get_snow_dsms(snow_path):
+    # Get list of snow-on DSM files to process
+    # @param snow_path: Path to single file or directory
+    # @returns: tuple (files, parent_dir) where:
+    #   - files: list of filenames
+    #   - parent_dir: parent directory path
 
     snow_path = Path(snow_path)
 
@@ -870,6 +1036,7 @@ def get_snow_dsms(snow_path):
             files.extend([f.name for f in snow_path.glob(ext)])
 
         if not files:
+            # throw error if no tif/tiff files found
             raise ValueError(f"No .tif/.tiff files found in {snow_path}")
 
         # Sort for consistent ordering
@@ -879,10 +1046,15 @@ def get_snow_dsms(snow_path):
         return files, snow_path
 
     else:
+        # throw error if path is invalid
         raise ValueError(f"Invalid path: {snow_path}")
 
 
 def process_batch(config, folders):
+    # Process multiple snow-on DSM files in batch mode
+    # @param config: Configuration dictionary
+    # @param folders: dict of folder paths
+    # @returns: list of dicts with results for each file
 
     # Determine snow-on DSM files to process
     snow_input = config['paths'].get('snow_on_file')
@@ -895,6 +1067,7 @@ def process_batch(config, folders):
         # Folder specified - process all files
         snow_files, _ = get_snow_dsms(folders['data_snow'])
     else:
+        # throw error if neither file nor folder specified
         raise ValueError("Must specify either snow_on_file or snow_on_folder in config")
 
     # Process each DSM
@@ -938,10 +1111,10 @@ def process_batch(config, folders):
     return batch_results
 
 
-
 def main():
-    # @param None (args come from command line and config file)
-    # @returns: None (system exit)
+    # Main workflow function
+    # @param: None (args come from command line and config file)
+    # @returns: None (exits with status code)
 
     # Parse command line arguments
     args = parse_args()

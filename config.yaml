@@ -1,80 +1,91 @@
-# =============================================================================
-# UAS Snow Depth Correction Workflow - Configuration
-# =============================================================================
+# UAS Snow Height Correction - Configuration File
 
-# -------- Correction Thresholds --------
-
+# -------- Thresholds --------
 thresholds:
-  # Tier 1: Max RMSE (m) to accept PPK-only (no correction)
-  tier1_rmse_max: 0.175
+  # Maximum RMSE (meters) for Tier 1 to be acceptable
+  # If Tier 1 RMSE is below this, no correction is needed
+  tier1_rmse_max: 0.15
 
-  # Tier 2: Minimum improvement to accept vertical shift correction as final version
-  # 0.30 = require 30% improvement over Tier 1
-  tier2_improvement_min: 0.30
+  # Minimum improvement (as decimal) required for Tier 2 to be accepted
+  # Example: 0.20 means Tier 2 must improve RMSE by at least 20%
+  tier2_improvement_min: 0.20
 
-# -------- Validation Settings --------
+  # Correction mode: controls which correction tier to use
+  # Options:
+  #   'auto' - automatically select best tier based on thresholds (default)
+  #   'ppk' or 'tier1' or 'none' - use PPK only, no correction
+  #   'vsc' or 'tier2' or 'vertical' - force Vertical Shift Correction
+  #   'ptc' or 'tier3' or 'planar' or 'tilt' - force Planar Trend Correction
+  correction_mode: "auto"
 
+# -------- Validation --------
 validation:
-  # Enable bootstrap uncertainty estimation
+  # Whether to run bootstrap uncertainty analysis
+  # Bootstrap is slow but provides confidence intervals
   run_bootstrap: true
 
-  # Number of bootstrap iterations
+  # Number of bootstrap resampling iterations
   bootstrap_iterations: 250
 
-  # Enable Leave-One-Out cross-validation
-  run_loo: true
-
-# -------- Coordinate Reference Systems --------
-
+# -------- CRS --------
 crs:
-  # Horizontal CRS - NAD83(2011) / UTM zone 13N (meter)
-  horizontal: "EPSG:6342"
+  # Horizontal CRS (EPSG code format)
+  horizontal: "EPSG:6342" # NAD83(2011) / UTM Zone 13N
 
-  # Vertical CRS - NAVD88 height (meter)
-  vertical: "EPSG:5703"
+  # Vertical datum
+  vertical: "NAVD88" # NAVD88
 
-# -------- File Paths --------
-
+# -------- Paths --------
 paths:
-  # Area of Interest name -- this is used for folder organization
-  aoi_name: "Professor"
+  # Area of Interest name (used for folder organization)
+  aoi_name: "Widowmaker"
 
-  # Bare-ground DSM filename
-  # Should be in: data/{aoi_name}/bareGround/
-  # Format: YYMMDD_AOI_Ground-DSM.tif
-  bare_ground_file: "241115_SiteA_Ground-DSM.tif"
+  # Bare ground DSM filename (must be in data/{aoi_name}/bareGround/)
+  bare_ground_file: "251110_Widowmaker_Ground-DSM.tiff"
 
-  # vGCP shapefile filename
-  # Should be in: data/{aoi_name}/vGCP/
-  # Must have fields: E (X), N (Y), Elevation (Z)
-  vgcp_file: "SiteA_vGCP.shp"
+  # Virtual Ground Control Points shapefile (must be in data/{aoi_name}/vGCP/)
+  vgcp_file: "Widowmaker_vGCP.shp"
 
-  # ---- SINGLE FILE MODE: Specify one snow-on DSM ----
-  # Format: YYMMDD_AOI-DSM.tif
-  # Should be in: data/{aoi_name}/snowOn/
-  snow_on_file: "241201_SiteA-DSM.tif"
+  # Single snow-on DSM file to process (leave empty for batch mode)
+  # Must be in data/{aoi_name}/snowOn/
+  # Example: 'Professor_251215-DSM.tif'
+  snow_on_file: ""
 
-  # ---- BATCH MODE: Process all DSMs in folder ----
-  # Leave empty ("") to use single file mode
-  # Set to folder path to process all .tif/.tiff files
-  # Example: "." to process all files in data/{aoi_name}/snowOn/
-  snow_on_folder: ""
+  # Process entire folder in batch mode (leave empty for single file mode)
+  # If set to anything (even 'yes'), will process all .tif files in snowOn folder
+  # Leave as empty string ('') to use snow_on_file instead
+  snow_on_folder: "."
+#-------- USAGE NOTES --------
 #
-# End of config.yaml
-
-# -------- Usage Notes --------
-
-# Single file mode:
-#   - Set snow_on_file to filename
-#   - Leave snow_on_folder empty
+# SINGLE FILE MODE:
+#   - Set snow_on_file to your filename
+#   - Set snow_on_folder to '' (empty)
 #   - Run: python uas_snow_correction.py --config config.yaml
 #
-# Batch mode (option 1 - config file):
-#   - Leave snow_on_file empty or set to any value (it will be ignored)
-#   - Set snow_on_folder to folder path or "."
+# BATCH MODE:
+#   - Set snow_on_file to '' (empty)
+#   - Set snow_on_folder to '.' (or any non-empty string)
 #   - Run: python uas_snow_correction.py --config config.yaml
 #
-# Batch mode (option 2 - command line):
-#   - Keep snow_on_file set (will be ignored)
-#   - Leave snow_on_folder empty
-#   - Run: python uas_snow_correction.py --config config.yaml --batch
+# MANUAL CORRECTION MODE:
+#   - Set correction_mode to desired tier (ppk, vsc, ptc, or auto)
+#   - This overrides automatic tier selection
+#   - Useful when you know which correction works best for your data
+#
+# FOLDER STRUCTURE:
+#   Your project folder should look like:
+#   ├── config.yaml (this file)
+#   ├── uas_snow_correction.py
+#   ├── data/
+#   │   └── {aoi_name}/
+#   │       ├── bareGround/
+#   │       │   └── {bare_ground_file}
+#   │       ├── vGCP/
+#   │       │   └── {vgcp_file}
+#   │       └── snowOn/
+#   │           └── (snow DSM files)
+#   └── outputs/
+#       └── {aoi_name}/
+#           ├── corrected/
+#           ├── statistics/
+#           └── plots/
