@@ -26,6 +26,7 @@ The workflow automatically selects the best correction tier based on configurabl
 - YAML-based configuration for reproducibility
 - Ability to choose which correction to apply foregoing the automatic selection
 - Run correction and validation or only validation
+- Per-point residual export for detailed analysis
 
 ## Requirements
 
@@ -181,6 +182,8 @@ paths:
 
 ### Snow DSM Correction
 
+The correction script automatically includes validation (LOO cross-validation and bootstrap uncertainty estimation).
+
 #### Single File Mode
 
 Process one snow-on DSM:
@@ -227,9 +230,12 @@ python uas_snow_correction.py --config config.yaml --aoi MySite
 python uas_snow_correction.py --config config.yaml --batch --no-bootstrap --verbose
 ```
 
-### Validation Only
+### Standalone Validation
 
-Use the validation tool to check accuracy after correction:
+Use the validation tool when you need to:
+- Validate DSMs that were corrected outside this workflow
+- Re-run validation with different parameters (e.g., more bootstrap iterations)
+- Validate DSMs from other sources
 
 #### Single File Validation
 
@@ -277,12 +283,27 @@ python uas_validation.py --bare bare.tif --snow snow.tif --vgcp vgcp.shp --outpu
 
 ### Statistics
 
-- `{filename}_statistics.csv`: Comprehensive statistics for all correction tiers
+- `{filename}_statistics.csv`: Summary statistics for all evaluated tiers
+  - Includes statistics for all evaluated tiers (Tier 1, Tier 2, and/or Tier 3)
+  - Shows which tier was selected and why
+  - Contains LOO cross-validation metrics
+  - Includes bootstrap uncertainty estimates (if enabled)
+  
+- `{filename}_point_residuals.csv`: Per-point residuals for each evaluated tier
+  - Point_ID: Sequential point identifier (1, 2, 3, ...)
+  - E, N: Easting and Northing coordinates
+  - Z_bare: Bare-ground elevation from vGCP
+  - Z_snow_ppk: PPK-corrected snow-on elevation
+  - Tier1_Residual: Residual for Tier 1 (PPK-only)
+  - Tier2_Residual: Residual for Tier 2 (if evaluated)
+  - Tier3_Residual: Residual for Tier 3 (if evaluated)
+  - Selected_Tier: Which tier was selected by the algorithm
+  
 - `batch_summary.csv`: Summary statistics for batch processing
 
 ### Plots
 
-- `{filename}_residuals.png`: Residual distributions and spatial patterns
+- `{filename}_residuals.png`: Residual distributions and spatial patterns showing individual vGCP errors
 - `{filename}_bootstrap.png`: Bootstrap RMSE distribution with confidence intervals
 
 ## Interpretation Guide
@@ -311,6 +332,40 @@ The workflow uses these decision rules:
 - **Bootstrap Mean RMSE**: Average RMSE from resampling
 - **Bootstrap 95% CI**: Confidence interval for RMSE estimate
 
+### Using Per-Point Residuals
+
+The point residuals CSV allows detailed inspection of:
+- Which vGCPs have the largest errors
+- Spatial patterns in residuals
+- How each correction tier affects individual points
+- Quality control and outlier detection
+
+Example analysis in Python:
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Load point residuals
+df = pd.read_csv('snow_20241215_point_residuals.csv')
+
+# Identify problematic points
+large_errors = df[abs(df['Tier1_Residual']) > 0.5]
+print(f"Points with residuals > 0.5m: {len(large_errors)}")
+
+# Compare tiers for a specific point
+point_5 = df[df['Point_ID'] == 5]
+print(point_5[['Tier1_Residual', 'Tier2_Residual', 'Tier3_Residual']])
+
+# Plot spatial pattern
+plt.scatter(df['E'], df['N'], c=df['Tier1_Residual'], 
+           cmap='RdBu', vmin=-1, vmax=1, s=100)
+plt.colorbar(label='Residual (m)')
+plt.xlabel('Easting')
+plt.ylabel('Northing')
+plt.title('Spatial Pattern of Residuals')
+plt.show()
+```
+
 ## Troubleshooting
 
 ### GDAL Installation Issues
@@ -325,7 +380,7 @@ Ensure all input files (bare-ground DSM, snow-on DSM, vGCP shapefile) are in the
 
 ### Insufficient vGCP Points
 
-Minimum 3 vGCPs required. 
+Minimum 3 vGCPs required for planar trend correction. 10+ recommended for robust results.
 
 ### High RMSE After Correction
 
@@ -333,6 +388,7 @@ Minimum 3 vGCPs required.
 - Verify DSM alignment and coregistration (i.e. have the same geographic area)
 - Consider using manual correction mode to force specific tier
 - Inspect residual plots for spatial patterns
+- Review per-point residuals CSV to identify problematic points
 
 ## Author
 
