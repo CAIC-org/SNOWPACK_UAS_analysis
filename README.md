@@ -363,32 +363,6 @@ The point residuals CSV allows detailed inspection of:
 - How each correction tier affects individual points
 - Quality control and outlier detection
 
-Example analysis in Python:
-```python
-import pandas as pd
-import matplotlib.pyplot as plt
-
-# Load point residuals
-df = pd.read_csv('snow_20241215_point_residuals.csv')
-
-# Identify problematic points
-large_errors = df[abs(df['Tier1_Residual']) > 0.5]
-print(f"Points with residuals > 0.5m: {len(large_errors)}")
-
-# Compare tiers for a specific point
-point_5 = df[df['Point_ID'] == 5]
-print(point_5[['Tier1_Residual', 'Tier2_Residual', 'Tier3_Residual']])
-
-# Plot spatial pattern
-plt.scatter(df['E'], df['N'], c=df['Tier1_Residual'], 
-           cmap='RdBu', vmin=-1, vmax=1, s=100)
-plt.colorbar(label='Residual (m)')
-plt.xlabel('Easting')
-plt.ylabel('Northing')
-plt.title('Spatial Pattern of Residuals')
-plt.show()
-```
-
 ## Troubleshooting
 
 ### GDAL Installation Issues
