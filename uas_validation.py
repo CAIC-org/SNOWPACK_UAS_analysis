@@ -76,13 +76,23 @@ Examples:
     --output validation.csv \\
     --bootstrap 250
 
+  # Single file with per-point residuals
+  python uas_validation.py \\
+    --bare data/SiteA/bareGround/bare.tif \\
+    --snow outputs/SiteA/corrected/snow_corrected.tif \\
+    --vgcp data/SiteA/vGCP/vgcp.shp \\
+    --output validation.csv \\
+    --bootstrap 250 \\
+    --save-residuals
+
   # Batch folder validation
   python uas_validation.py \\
     --bare data/SiteA/bareGround/bare.tif \\
     --snow outputs/SiteA/corrected/ \\
     --vgcp data/SiteA/vGCP/vgcp.shp \\
     --output validation_batch.csv \\
-    --bootstrap 250
+    --bootstrap 250 \\
+    --save-residuals
         """
     )
 
@@ -93,6 +103,7 @@ Examples:
     parser.add_argument('--bootstrap', type=int, default=0, help='Bootstrap iterations (0=disabled)')
     parser.add_argument('--plot-dir', default=None, help='Directory for plots (optional)')
     parser.add_argument('--label', default='Validation', help='Label for output files')
+    parser.add_argument('--save-residuals', action='store_true', help='Save per-point residuals to CSV')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
 
     return parser.parse_args()
@@ -374,9 +385,34 @@ def create_plots(residuals, loo_stats, boot_stats, plot_dir, label):
 
     logging.info(f"Saved plots: {label}_*.png")
 
+def save_point_residuals(vgcp_gdf, bare_z, snow_z, residuals, label, output_path):
+    # Save per-point residuals to CSV
+    # @param vgcp_gdf (gpd.GeoDataFrame): GeoDataFrame with vGCP points
+    # @param bare_z (np.ndarray): Bare-ground elevations at vGCP locations
+    # @param snow_z (np.ndarray): Snow-on elevations at vGCP locations
+    # @param residuals (np.ndarray): Calculated residuals (snow_z - bare_z)
+    # @param label (str): Label for the validation
+    # @param output_path (str): Path to output CSV file
+    # @return: None
+    
+    # Build output dataframe
+    residuals_df = pd.DataFrame({
+        'Point_ID': range(1, len(vgcp_gdf) + 1),
+        'E': vgcp_gdf['E'].values,
+        'N': vgcp_gdf['N'].values,
+        'Z_bare': bare_z,
+        'Z_snow': snow_z,
+        'Residual': residuals,
+        'Label': label
+    })
+    
+    # Save to CSV
+    residuals_df.to_csv(output_path, index=False, float_format='%.6f')
+    logging.info(f"Saved point residuals: {Path(output_path).name}")
+
 # -------- SINGLE FILE VALIDATION --------
 
-def validate_single(bare_path, snow_path, vgcp_path, label, bootstrap_iter=0, plot_dir=None):
+def validate_single(bare_path, snow_path, vgcp_path, label, bootstrap_iter=0, plot_dir=None, save_residuals=False, residuals_output=None):
     # Validate a single DSM
     # @param bare_path (str): Path to bare-ground DSM
     # @param snow_path (str): Path to snow-on DSM
@@ -384,6 +420,8 @@ def validate_single(bare_path, snow_path, vgcp_path, label, bootstrap_iter=0, pl
     # @param label (str): Label for output
     # @param bootstrap_iter (int): Number of bootstrap iterations (0=disabled)
     # @param plot_dir (str): Directory for plots (optional)
+    # @param save_residuals (bool): Whether to save per-point residuals CSV
+    # @param residuals_output (str): Path for residuals CSV output (optional)
     # @return dict: Dictionary with all validation results
     # note:
     #   validation workflow:
@@ -394,6 +432,7 @@ def validate_single(bare_path, snow_path, vgcp_path, label, bootstrap_iter=0, pl
         # 5. Run LOO validation
         # 6. Run bootstrap (if enabled)
         # 7. Create plots (if enabled)
+        # 8. Save per-point residuals (if enabled)
 
     logging.info(f"Validating: {Path(snow_path).name}")
 
@@ -432,6 +471,10 @@ def validate_single(bare_path, snow_path, vgcp_path, label, bootstrap_iter=0, pl
     # ---- Create plots ----
     if plot_dir:
         create_plots(residuals, loo_stats, boot_stats, plot_dir, label)
+    
+    # ---- Save per-point residuals ----
+    if save_residuals and residuals_output:
+        save_point_residuals(vgcp_gdf, bare_z, snow_z, residuals, label, residuals_output)
 
     # ---- Combine results ----
     results = {
@@ -454,13 +497,15 @@ def validate_single(bare_path, snow_path, vgcp_path, label, bootstrap_iter=0, pl
 
 # -------- BATCH VALIDATION --------
 
-def validate_batch(bare_path, snow_folder, vgcp_path, bootstrap_iter=0, plot_dir=None):
+def validate_batch(bare_path, snow_folder, vgcp_path, bootstrap_iter=0, plot_dir=None, save_residuals=False, residuals_dir=None):
     # Validate multiple DSMs in a folder
     # @param bare_path (str): Path to bare-ground DSM
     # @param snow_folder (str): Path to folder with snow-on DSMs
     # @param vgcp_path (str): Path to vGCP shapefile
     # @param bootstrap_iter (int): Number of bootstrap iterations
     # @param plot_dir (str): Directory for plots (optional)
+    # @param save_residuals (bool): Whether to save per-point residuals
+    # @param residuals_dir (str): Directory for residuals CSV files (optional)
     # @return list: List of result dictionaries, one per DSM
     # note:
     #     - Processes all .tif and .tiff files in folder
@@ -491,6 +536,12 @@ def validate_batch(bare_path, snow_folder, vgcp_path, bootstrap_iter=0, plot_dir
         try:
             # Use filename (w/o extension) as label
             label = Path(snow_file).stem
+            
+            # Set up residuals output path if enabled
+            residuals_output = None
+            if save_residuals and residuals_dir:
+                Path(residuals_dir).mkdir(parents=True, exist_ok=True)
+                residuals_output = str(Path(residuals_dir) / f"{label}_point_residuals.csv")
 
             # Validate current DSM
             result = validate_single(
@@ -499,7 +550,9 @@ def validate_batch(bare_path, snow_folder, vgcp_path, bootstrap_iter=0, plot_dir
                 vgcp_path,
                 label,
                 bootstrap_iter,
-                plot_dir
+                plot_dir,
+                save_residuals,
+                residuals_output
             )
 
             results.append(result)
@@ -536,17 +589,32 @@ def main():
 
         # Determine processing mode
         snow_path = Path(args.snow)
+        
+        # Determine residuals output path
+        residuals_dir = None
+        residuals_output = None
+        if args.save_residuals:
+            output_dir = Path(args.output).parent
+            residuals_dir = output_dir / 'point_residuals'
+            residuals_dir.mkdir(parents=True, exist_ok=True)
 
         if snow_path.is_file():
             # Single file mode
             logging.info("Running in SINGLE file mode")
+            
+            # Set residuals output path
+            if args.save_residuals:
+                residuals_output = str(residuals_dir / f"{args.label}_point_residuals.csv")
+            
             result = validate_single(
                 args.bare,
                 str(snow_path),
                 args.vgcp,
                 args.label,
                 args.bootstrap,
-                args.plot_dir
+                args.plot_dir,
+                args.save_residuals,
+                residuals_output
             )
             results = [result]
 
@@ -558,7 +626,9 @@ def main():
                 str(snow_path),
                 args.vgcp,
                 args.bootstrap,
-                args.plot_dir
+                args.plot_dir,
+                args.save_residuals,
+                residuals_dir
             )
 
         else:
@@ -569,6 +639,9 @@ def main():
         df = pd.DataFrame(results)
         df.to_csv(args.output, index=False, float_format='%.6f') # float_format for precision -- 6 decimal places
         logging.info(f"\nResults Saved: {args.output}")
+        
+        if args.save_residuals:
+            logging.info(f"Per-point residuals saved to: {residuals_dir}")
 
         # woohoo success!
         logging.info("\n" + "="*70)
