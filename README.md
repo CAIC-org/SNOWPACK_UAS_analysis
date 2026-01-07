@@ -47,7 +47,7 @@ The workflow automatically selects the best correction tier based on configurabl
 
 ## Installation
 
-### Option 1: Conda (Recommended)
+### Option 1: Conda
 
 Conda handles GDAL installation automatically. This is preferred for Windows. 
 
