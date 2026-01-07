@@ -623,9 +623,10 @@ def evaluate_tiers(vgcp_df, snow_data, snow_meta, config):
     tier2_res = z_tier2 - vgcp_df['Z_bare'].values
     tier2_stats = calc_stats(tier2_res)
 
-    # Store results
+    # Store results including per-point residuals
     results['tier2_stats'] = tier2_stats
     results['tier2_corrected'] = tier2_corrected
+    results['tier2_residuals'] = tier2_res  # Store per-point residuals
 
     # Calculate improvement percentage
     tier2_imp = (tier1_stats['RMSE'] - tier2_stats['RMSE']) / tier1_stats['RMSE']
@@ -659,10 +660,11 @@ def evaluate_tiers(vgcp_df, snow_data, snow_meta, config):
         tier3_res = z_tier3 - vgcp_df['Z_bare'].values
         tier3_stats = calc_stats(tier3_res)
 
-        # Store results
+        # Store results including per-point residuals
         results['tier3_stats'] = tier3_stats
         results['tier3_corrected'] = tier3_corrected
         results['tier3_coeffs'] = (a, b, c)
+        results['tier3_residuals'] = tier3_res  # Store per-point residuals
 
         logging.info(f"Tier 3 RMSE: {tier3_stats['RMSE']:.4f} m")
 
@@ -843,6 +845,40 @@ def create_stats_csv(config, results, validation, snow_filename, output_path):
     logging.info(f"Saved stats: {Path(output_path).name}")
 
 
+def save_point_residuals(vgcp_df, results, snow_file, output_path):
+    # Save per-point residuals to CSV for all evaluated tiers
+    # @param vgcp_df: DataFrame with vGCP data including E, N, Z_bare, Z_snow, Residual
+    # @param results: Tier evaluation results dict containing residuals for each tier
+    # @param snow_file: Input snow-on DSM filename
+    # @param output_path: Output CSV file path
+    # @returns: None
+    
+    # Build output dataframe with base information
+    residuals_df = pd.DataFrame({
+        'Point_ID': range(1, len(vgcp_df) + 1),
+        'E': vgcp_df['E'].values,
+        'N': vgcp_df['N'].values,
+        'Z_bare': vgcp_df['Z_bare'].values,
+        'Z_snow_ppk': vgcp_df['Z_snow'].values,
+        'Tier1_Residual': vgcp_df['Residual'].values
+    })
+    
+    # Add Tier 2 residuals if Tier 2 was evaluated
+    if 'tier2_residuals' in results:
+        residuals_df['Tier2_Residual'] = results['tier2_residuals']
+    
+    # Add Tier 3 residuals if Tier 3 was evaluated
+    if 'tier3_residuals' in results:
+        residuals_df['Tier3_Residual'] = results['tier3_residuals']
+    
+    # Add a column indicating which tier was selected
+    residuals_df['Selected_Tier'] = results['selected']
+    
+    # Save to CSV
+    residuals_df.to_csv(output_path, index=False, float_format='%.6f')
+    logging.info(f"Saved point residuals: {Path(output_path).name}")
+
+
 def create_plots(vgcp_df, results, validation, output_dir, filename):
     # Create visualization plots for correction results
     # @param vgcp_df: DataFrame with vGCP data
@@ -1007,6 +1043,11 @@ def process_single_dsm(config, folders, snow_file):
     stats_name = Path(snow_file).stem + '_statistics.csv'
     create_stats_csv(config, results, validation, snow_file,
                     str(folders['output_statistics'] / stats_name))
+    
+    # Save per-point residuals CSV
+    residuals_name = Path(snow_file).stem + '_point_residuals.csv'
+    save_point_residuals(vgcp_df, results, snow_file,
+                        str(folders['output_statistics'] / residuals_name))
 
     # Create plots
     create_plots(vgcp_df, results, validation, folders['output_plots'], snow_file)
