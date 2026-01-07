@@ -247,6 +247,15 @@ python uas_validation.py \
   --output validation_results.csv \
   --bootstrap 250 \
   --plot-dir validation_plots/
+
+# With per-point residuals export
+python uas_validation.py \
+  --bare data/SiteA/bareGround/bare.tif \
+  --snow outputs/SiteA/corrected/snow_corrected.tif \
+  --vgcp data/SiteA/vGCP/vgcp.shp \
+  --output validation_results.csv \
+  --bootstrap 250 \
+  --save-residuals
 ```
 
 #### Batch Validation
@@ -259,6 +268,15 @@ python uas_validation.py \
   --output batch_validation.csv \
   --bootstrap 250 \
   --plot-dir validation_plots/
+
+# With per-point residuals export
+python uas_validation.py \
+  --bare data/SiteA/bareGround/bare.tif \
+  --snow outputs/SiteA/corrected/ \
+  --vgcp data/SiteA/vGCP/vgcp.shp \
+  --output batch_validation.csv \
+  --bootstrap 250 \
+  --save-residuals
 ```
 
 #### Validation Options
@@ -270,9 +288,14 @@ python uas_validation.py --bare bare.tif --snow snow.tif --vgcp vgcp.shp --outpu
 # With custom label
 python uas_validation.py --bare bare.tif --snow snow.tif --vgcp vgcp.shp --output stats.csv --label "Site_A_Feb"
 
+# With per-point residuals
+python uas_validation.py --bare bare.tif --snow snow.tif --vgcp vgcp.shp --output stats.csv --save-residuals
+
 # Verbose logging
 python uas_validation.py --bare bare.tif --snow snow.tif --vgcp vgcp.shp --output stats.csv --verbose
 ```
+
+**Note:** When using `--save-residuals`, per-point residuals are saved to a `point_residuals/` folder in the same directory as the output CSV.
 
 ## Output Files
 
