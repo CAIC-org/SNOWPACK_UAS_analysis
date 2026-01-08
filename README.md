@@ -28,6 +28,21 @@ The workflow automatically selects the best correction tier based on configurabl
 - Run correction and validation or only validation
 - Per-point residual export for detailed analysis
 
+## Prerequisites
+
+Before installation, ensure you have:
+
+- **Git**: Required for cloning the repository
+  - Windows: Download from https://git-scm.com/download/windows
+  - Mac: Install via Homebrew (`brew install git`) or download from git-scm.com
+  - Linux: `sudo apt-get install git` (Ubuntu/Debian) or `sudo yum install git` (RHEL/CentOS)
+  - Verify installation: `git --version`
+  
+- **Conda** (recommended for Windows) or Python 3.9+
+  - Download Anaconda or Miniconda from https://docs.conda.io/en/latest/miniconda.html
+
+**Note:** After installing Git, you may need to restart your terminal or computer for the PATH to update.
+
 ## Requirements
 
 ### System Requirements
@@ -47,9 +62,9 @@ The workflow automatically selects the best correction tier based on configurabl
 
 ## Installation
 
-### Option 1: Conda
+### Option 1: Conda (Recommended for Windows)
 
-Conda handles GDAL installation automatically. This is preferred for Windows. 
+Conda handles GDAL installation automatically.
 
 ```bash
 # Clone repository
@@ -62,6 +77,8 @@ conda env create -f environment.yml
 # Activate environment
 conda activate uas_HS
 ```
+
+**If conda gets stuck on "Solving environment"**, see the [Conda Troubleshooting](#conda-solving-environment-stuck) section below.
 
 ### Option 2: Pip (Linux/Mac)
 
@@ -91,6 +108,17 @@ pip install -r requirements.txt
 # Install GDAL matching your system version
 pip install GDAL==X.X.X  # Replace X.X.X with your GDAL version
 ```
+
+### Alternative: Download Without Git
+
+If you prefer not to use Git:
+
+1. Go to the repository on GitHub
+2. Click the green "Code" button
+3. Click "Download ZIP"
+4. Extract the ZIP file to your desired location
+5. Open terminal/PowerShell in the extracted folder
+6. Continue with conda or pip installation steps above
 
 ## Data Structure
 
@@ -364,6 +392,79 @@ The point residuals CSV allows detailed inspection of:
 - Quality control and outlier detection
 
 ## Troubleshooting
+
+### Conda "Solving Environment" Stuck
+
+If `conda env create -f environment.yml` gets stuck on "Solving environment", try these solutions:
+
+#### Solution 1: Use Mamba (Fastest)
+
+Mamba is a faster conda alternative:
+
+```bash
+# Cancel the stuck process with Ctrl+C
+
+# Install mamba
+conda install mamba -n base -c conda-forge
+
+# Use mamba instead of conda
+mamba env create -f environment.yml
+conda activate uas_HS
+```
+
+#### Solution 2: Manual Environment Creation
+
+Create the environment step-by-step:
+
+```bash
+# Create basic environment
+conda create -n uas_HS python=3.9
+conda activate uas_HS
+
+# Install packages from conda-forge
+conda install -c conda-forge gdal rasterio geopandas numpy pandas matplotlib seaborn pyyaml
+```
+
+#### Solution 3: Hybrid Approach (Conda + Pip)
+
+Use conda for GDAL only, pip for everything else:
+
+```bash
+# Create environment with Python and GDAL
+conda create -n uas_HS python=3.9
+conda activate uas_HS
+conda install -c conda-forge gdal
+
+# Install remaining packages with pip
+pip install rasterio geopandas numpy pandas matplotlib seaborn pyyaml
+```
+
+#### Solution 4: Clean Conda Cache
+
+Sometimes conda's cache gets corrupted:
+
+```bash
+conda clean --all
+conda env create -f environment.yml
+```
+
+#### Solution 5: Set Strict Channel Priority
+
+```bash
+conda config --set channel_priority strict
+conda env create -f environment.yml
+```
+
+### Git Installation Issues
+
+**"git is not recognized" error:**
+
+1. Verify Git is installed: Check if `C:\Program Files\Git\cmd\git.exe` exists
+2. Add to PATH: Add `C:\Program Files\Git\cmd` to your system PATH (see Installation Prerequisites)
+3. Restart terminal: Close and reopen PowerShell/terminal completely
+4. Restart computer: If PATH still doesn't update, restart your computer
+
+**Alternative:** Use Git Bash (comes with Git for Windows) or download the repository as a ZIP file.
 
 ### GDAL Installation Issues
 
