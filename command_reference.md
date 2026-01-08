@@ -11,9 +11,9 @@ Quick reference guide for all commands and options in the SNOWPACK_UAS_analysis 
 
 ---
 
-## Snow DSM Correction
+## Snow-on DSM Correction
 
-Main script for correcting UAS-derived snow DSMs using virtual ground control points.
+Main script for correcting UAS-derived snow-on DSMs using virtual ground control points (vGCPs).
 
 ### Basic Syntax
 
