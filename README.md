@@ -143,7 +143,7 @@ project_folder/
         ├── statistics/            # CSV statistics files
         └── plots/                 # Validation plots
 ```
-Note: The project_folder can be named whatever the user wants, it does not need to be "project_folder". 
+Note: The project_folder will likely be called SNOWPACK_UAS_analysis after the user clones the repo from git.
 
 ## Input Data Requirements
 
