@@ -626,3 +626,7 @@ python uas_snow_correction.py --config config.yaml
 - All input data must be in the same coordinate reference system
 - Bootstrap iterations can be adjusted based on desired precision vs. processing time
 - Verbose mode is useful for debugging but produces more console output
+
+### Author
+
+Valerie Foley, valerie.foley@state.co.us
