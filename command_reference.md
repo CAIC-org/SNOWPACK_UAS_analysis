@@ -404,12 +404,6 @@ paths:
 | `horizontal` | string | Horizontal CRS in EPSG format | "EPSG:6342" |
 | `vertical` | string | Vertical datum name | "NAVD88" |
 
-**Common EPSG Codes:**
-- `EPSG:6342`: NAD83(2011) / UTM Zone 13N
-- `EPSG:6343`: NAD83(2011) / UTM Zone 14N
-- `EPSG:32612`: WGS84 / UTM Zone 12N
-- `EPSG:32613`: WGS84 / UTM Zone 13N
-
 #### Paths Section
 
 | Parameter | Type | Description |
