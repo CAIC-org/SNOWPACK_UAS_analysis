@@ -2,7 +2,7 @@
 UAS Snow Height Correction Workflow
 
 Author: Valerie Foley
-Last Updated: 1/8/2026
+Last Updated: 12/23/2025
 
 Description:
     Automated workflow for correcting systematic errors in UAS-derived snow-on DSMs
@@ -422,10 +422,19 @@ def loo_validation(vgcp_df, snow_data, snow_meta, tier, tier2_me=None, tier3_coe
     # @returns: tuple (loo_stats, loo_res) where:
     #   - loo_stats: dict of statistics
     #   - loo_res: numpy array of LOO residuals
+    # note:
+    #   - For Tier3 with only 3 points, LOO cannot be performed (need 3 points to fit plane)
+    #   - In this case, returns None for both stats and residuals
 
     # Remove any NaN values
     valid = vgcp_df.dropna(subset=['E', 'N', 'Residual']).copy()
     n = len(valid)
+    
+    # Check if LOO is possible for Tier 3
+    if tier == 'Tier3' and n < 4:
+        logging.warning(f"Cannot perform LOO validation for Tier 3 with only {n} points (need 4+)")
+        logging.warning("Skipping LOO validation - correction results are still valid")
+        return None, None
 
     # Array to store LOO residuals
     loo_res = np.zeros(n)
@@ -491,6 +500,10 @@ def bootstrap_uncertainty(vgcp_df, snow_data, snow_meta, tier, n_iter=250,
     # @param tier2_me: Mean error for Tier2 correction (optional)
     # @param tier3_coeffs: Plane coefficients (a, b, c) for Tier3 (optional)
     # @returns: dict containing bootstrap statistics (mean, std, CI lower/upper, samples)
+    #           OR None if bootstrap cannot be performed
+    # note:
+    #   - For Tier3 with only 3 points, bootstrap is unreliable (resample may have <3 unique points)
+    #   - In this case, returns None
 
     # Set random seed for reproducibility
     np.random.seed(42)
@@ -498,6 +511,12 @@ def bootstrap_uncertainty(vgcp_df, snow_data, snow_meta, tier, n_iter=250,
     # Remove NaN values
     valid = vgcp_df.dropna(subset=['E', 'N', 'Residual']).copy()
     n = len(valid)
+    
+    # Check if bootstrap is reliable for Tier 3
+    if tier == 'Tier3' and n < 4:
+        logging.warning(f"Cannot perform reliable bootstrap for Tier 3 with only {n} points (need 4+)")
+        logging.warning("Skipping bootstrap validation - correction results are still valid")
+        return None
 
     # Array to store bootstrap RMSE values
     boot_rmse = np.zeros(n_iter)
@@ -1024,8 +1043,15 @@ def process_single_dsm(config, folders, snow_file):
 
     # LOO validation
     loo_stats, loo_residuals = loo_validation(vgcp_df, snow_data, snow_meta, selected, tier2_me, tier3_coeffs)
-    validation['loo'] = loo_stats
-    validation['loo_residuals'] = loo_residuals
+    
+    if loo_stats is not None:
+        validation['loo'] = loo_stats
+        validation['loo_residuals'] = loo_residuals
+        logging.info(f"LOO RMSE: {loo_stats['RMSE']:.4f} m")
+    else:
+        validation['loo'] = None
+        validation['loo_residuals'] = None
+        logging.info("LOO validation skipped (insufficient points for selected tier)")
 
     # Bootstrap validation
     if config['validation']['run_bootstrap']:
@@ -1034,7 +1060,12 @@ def process_single_dsm(config, folders, snow_file):
             config['validation']['bootstrap_iterations'],
             tier2_me, tier3_coeffs
         )
-        validation['bootstrap'] = boot_stats
+        if boot_stats is not None:
+            validation['bootstrap'] = boot_stats
+            logging.info(f"Bootstrap: mean={boot_stats['mean']:.4f} m, CI=[{boot_stats['ci_lower']:.4f}, {boot_stats['ci_upper']:.4f}]")
+        else:
+            validation['bootstrap'] = None
+            logging.info("Bootstrap validation skipped (insufficient points for selected tier)")
 
     # Save outputs
     logging.info("Saving outputs...")
