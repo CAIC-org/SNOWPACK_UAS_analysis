@@ -2,7 +2,7 @@
 UAS Snow Height Correction Workflow
 
 Author: Valerie Foley
-Last Updated: 12/23/2025
+Last Updated: 1/9/2026
 
 Description:
     Automated workflow for correcting systematic errors in UAS-derived snow-on DSMs
