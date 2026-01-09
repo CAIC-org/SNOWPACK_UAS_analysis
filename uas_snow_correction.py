@@ -900,25 +900,34 @@ def create_plots(vgcp_df, results, validation, output_dir, filename):
 
     # Tier 1 (before correction)
     tier1_res = vgcp_df['Residual'].dropna().values
-    ax1.bar(range(len(tier1_res)), tier1_res, color='coral', edgecolor='black', alpha=0.7)
+    x_positions = range(1, len(tier1_res) + 1)
+    ax1.bar(x_positions, tier1_res, color='coral', edgecolor='black', alpha=0.7)
     ax1.axhline(0, color='red', linestyle='--', lw=2)
     ax1.set_xlabel('vGCP Index')
     ax1.set_ylabel('Residual (m)')
     ax1.set_title(f'Tier 1 (PPK-only): RMSE = {results["tier1_stats"]["RMSE"]:.4f} m')
+    ax1.set_xticks(x_positions)
     ax1.grid(alpha=0.3)
 
     # Selected tier (after correction)
-    if validation.get('loo_residuals') is not None:
-        # Use LOO residuals for plotting
-        selected_res = validation['loo_residuals']
-        selected_rmse = results[f'{selected.lower()}_stats']['RMSE']
+    # Use actual tier residuals (not LOO residuals) to match CSV output
+    if selected == 'Tier1':
+        selected_res = vgcp_df['Residual'].dropna().values
+    elif selected == 'Tier2':
+        selected_res = results.get('tier2_residuals', vgcp_df['Residual'].dropna().values)
+    else:  # Tier3
+        selected_res = results.get('tier3_residuals', vgcp_df['Residual'].dropna().values)
+    
+    selected_rmse = results[f'{selected.lower()}_stats']['RMSE']
 
-        ax2.bar(range(len(selected_res)), selected_res, color='skyblue', edgecolor='black', alpha=0.7)
-        ax2.axhline(0, color='red', linestyle='--', lw=2)
-        ax2.set_xlabel('vGCP Index')
-        ax2.set_ylabel('Residual (m)')
-        ax2.set_title(f'{selected}: RMSE = {selected_rmse:.4f} m')
-        ax2.grid(alpha=0.3)
+    x_positions = range(1, len(selected_res) + 1)
+    ax2.bar(x_positions, selected_res, color='skyblue', edgecolor='black', alpha=0.7)
+    ax2.axhline(0, color='red', linestyle='--', lw=2)
+    ax2.set_xlabel('vGCP Index')
+    ax2.set_ylabel('Residual (m)')
+    ax2.set_title(f'{selected}: RMSE = {selected_rmse:.4f} m')
+    ax2.set_xticks(x_positions)
+    ax2.grid(alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(Path(output_dir) / f'{base}_residuals.png', dpi=300)
@@ -1188,7 +1197,7 @@ def main():
             snow_file = config['paths']['snow_on_file']
             process_single_dsm(config, folders, snow_file)
 
-        # Success!
+        # woohoo success
         logging.info("\n" + "="*70)
         logging.info(" Workflow Complete")
         logging.info("="*70)
