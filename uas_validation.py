@@ -2,7 +2,7 @@
 UAS Snow Depth Validation
 
 Author: Valerie Foley, valerie.foley@state.co.us
-Last Updated: 12/17/2025
+Last Updated: 1/9/2026
 
 Description:
     Standalone validation tool for accuracy assessment of snow-on DSMs.
@@ -223,7 +223,7 @@ def calc_stats(residuals):
 def loo_validation(residuals):
     # Perform Leave-One-Out cross-validation
     # @param residuals (np.ndarray): Array of residuals
-    # @return dict: LOO statistics (same format as calc_stats)
+    # @return dict: LOO statistics (same format as calc_stats) or None if insufficient points
     # note:
     #    For each point:
     #    1. Remove it from dataset
@@ -237,8 +237,10 @@ def loo_validation(residuals):
     n = len(valid)
 
     if n < 3:
-        # throw error is fewer than 3 valid points
-        raise ValueError(f"Need at least 3 valid points for LOO, have {n}")
+        # Cannot perform LOO with fewer than 3 points
+        logging.warning(f"Cannot perform LOO validation with only {n} points (need 3+)")
+        logging.warning("Skipping LOO validation")
+        return None
 
     # Array for LOO residuals
     loo_res = np.zeros(n)
@@ -459,7 +461,10 @@ def validate_single(bare_path, snow_path, vgcp_path, label, bootstrap_iter=0, pl
 
     # ---- LOO validation ----
     loo_stats = loo_validation(residuals)
-    logging.info(f"LOO RMSE: {loo_stats['RMSE']:.4f} m")
+    if loo_stats is not None:
+        logging.info(f"LOO RMSE: {loo_stats['RMSE']:.4f} m")
+    else:
+        logging.info("LOO validation skipped (insufficient points)")
 
     # ---- Bootstrap ----
     boot_stats = None
@@ -480,9 +485,12 @@ def validate_single(bare_path, snow_path, vgcp_path, label, bootstrap_iter=0, pl
     results = {
         'Label': label,
         'DSM': Path(snow_path).name,
-        **{f'{k}': v for k, v in stats.items()},
-        **{f'LOO_{k}': v for k, v in loo_stats.items()}
+        **{f'{k}': v for k, v in stats.items()}
     }
+    
+    # Add LOO statistics if available
+    if loo_stats is not None:
+        results.update({f'LOO_{k}': v for k, v in loo_stats.items()})
 
     # Add bootstrap statistics
     if boot_stats:
