@@ -68,7 +68,7 @@ Conda handles GDAL installation automatically.
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/SNOWPACK_UAS_analysis.git
+git clone https://github.com/CAIC-org/SNOWPACK_UAS_analysis.git
 cd SNOWPACK_UAS_analysis
 
 # Create conda environment
