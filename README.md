@@ -95,7 +95,7 @@ brew install gdal
 gdalinfo --version
 
 # Clone repository
-git clone https://github.com/yourusername/SNOWPACK_UAS_analysis.git
+git clone https://github.com/CAIC-org/SNOWPACK_UAS_analysis.git
 cd SNOWPACK_UAS_analysis
 
 # Create virtual environment
