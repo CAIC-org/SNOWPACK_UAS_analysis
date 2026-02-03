@@ -41,6 +41,10 @@ Before installation, ensure you have:
 - **Conda** (recommended for Windows) or Python 3.9+
   - Download Anaconda or Miniconda from https://docs.conda.io/en/latest/miniconda.html
 
+- **ArcGIS Pro** (for snow depth calculation)
+  - Required for the snow height calculator script
+  - Includes Spatial Analyst extension
+
 **Note:** After installing Git, you may need to restart your terminal or computer for the PATH to update.
 
 ## Requirements
@@ -128,6 +132,7 @@ User project folder should be organized as follows:
 project_folder/
 ├── config.yaml                    # Configuration file
 ├── uas_snow_correction.py         # Main correction script
+├── uas_snow_height_calculator.py  # Snow depth calculation script (ArcGIS Pro)
 ├── uas_validation.py              # Standalone validation tool
 ├── data/
 │   └── {aoi_name}/                # Area of Interest folder
@@ -139,7 +144,8 @@ project_folder/
 │           └── snow_*.tif         # Snow-on DSM(s) to correct
 └── outputs/
     └── {aoi_name}/                # Results folder (auto-created)
-        ├── corrected/             # Corrected DSMs and snow depth
+        ├── corrected/             # Corrected DSMs
+        ├── snowHeight/            # Snow depth rasters
         ├── statistics/            # CSV statistics files
         └── plots/                 # Validation plots
 ```
@@ -208,7 +214,9 @@ paths:
 
 ## Usage
 
-### Snow DSM Correction
+The workflow is split into two scripts that must be run sequentially:
+
+### Step 1: Snow DSM Correction
 
 The correction script automatically includes validation (LOO cross-validation and bootstrap uncertainty estimation).
 
@@ -257,6 +265,37 @@ python uas_snow_correction.py --config config.yaml --aoi MySite
 # Combine options
 python uas_snow_correction.py --config config.yaml --batch --no-bootstrap --verbose
 ```
+
+### Step 2: Snow Depth Calculation
+
+After correcting your DSMs, run the snow height calculator from ArcGIS Pro Python Command Prompt. This script uses ArcPy to properly handle raster alignment when subtracting the bare ground DSM from the corrected snow-on DSMs.
+
+**How to access ArcGIS Pro Python Command Prompt:**
+1. Open ArcGIS Pro
+2. Go to Project tab -> Python -> Python Command Prompt
+3. Or search Windows start menu for "Python Command Prompt (ArcGIS Pro)"
+
+```bash
+# Navigate to your project directory
+cd path\to\SNOWPACK_UAS_analysis
+
+# Run the snow height calculator
+python uas_snow_height_calculator.py --config config.yaml
+
+# With verbose output
+python uas_snow_height_calculator.py --config config.yaml --verbose
+
+# Override AOI name
+python uas_snow_height_calculator.py --config config.yaml --aoi MySite
+```
+
+The snow height calculator will:
+- Read all corrected DSMs from `outputs/{aoi_name}/corrected/`
+- Read the bare ground DSM from your config
+- Calculate snow depth using ArcPy Raster Calculator
+- Save results to `outputs/{aoi_name}/snowHeight/`
+
+**Important:** The snow height calculator must be run from ArcGIS Pro Python Command Prompt. It will not work in a standard Python environment because it requires ArcPy.
 
 ### Standalone Validation
 
@@ -327,10 +366,17 @@ python uas_validation.py --bare bare.tif --snow snow.tif --vgcp vgcp.shp --outpu
 
 ## Output Files
 
-### Corrected DSMs and Snow Depth
+### Corrected DSMs (from uas_snow_correction.py)
 
-- `{filename}_Tier{N}_DSM.tif`: Corrected snow-on DSM
-- `{filename}_Tier{N}_snowHeight.tif`: Snow height raster (corrected DSM - bare-ground DSM)
+- `{filename}_noCorr_DSM.tif`: Tier 1 corrected DSM (PPK-only, no correction)
+- `{filename}_VSC_DSM.tif`: Tier 2 corrected DSM (Vertical Shift Correction)
+- `{filename}_PTC_DSM.tif`: Tier 3 corrected DSM (Planar Trend Correction)
+
+### Snow Depth Rasters (from uas_snow_height_calculator.py)
+
+- `{filename}_noCorr_snowHeight.tif`: Snow depth from Tier 1
+- `{filename}_VSC_snowHeight.tif`: Snow depth from Tier 2
+- `{filename}_PTC_snowHeight.tif`: Snow depth from Tier 3
 
 ### Statistics
 
@@ -354,8 +400,8 @@ python uas_validation.py --bare bare.tif --snow snow.tif --vgcp vgcp.shp --outpu
 
 ### Plots
 
-- `{filename}_residuals.png`: Residual distributions and spatial patterns showing individual vGCP errors
-- `{filename}_bootstrap.png`: Bootstrap RMSE distribution with confidence intervals
+- `{filename}_residual_comparison.png`: Point-by-point comparison of residuals before and after correction
+- `{filename}_tier_comparison.png`: Bar chart comparing RMSE across evaluated tiers
 
 ## Interpretation Guide
 
@@ -471,6 +517,20 @@ conda env create -f environment.yml
 **Windows**: Use conda instead of pip. GDAL is difficult to install via pip on Windows.
 
 **Linux/Mac**: Ensure system GDAL libraries are installed and Python GDAL version matches system version.
+
+### ArcGIS Pro Issues
+
+**ArcPy not available error:**
+
+The snow height calculator must be run from ArcGIS Pro Python Command Prompt. To access it:
+
+1. Open ArcGIS Pro
+2. Go to Project tab -> Python -> Python Command Prompt
+3. Or search Windows start menu for "Python Command Prompt (ArcGIS Pro)"
+
+**Spatial Analyst not available:**
+
+Ensure you have the Spatial Analyst extension enabled in ArcGIS Pro. The snow height calculator will automatically check out the extension when it runs.
 
 ### CRS Mismatch Errors
 
