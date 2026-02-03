@@ -5,6 +5,7 @@ Quick reference guide for all commands and options in the SNOWPACK_UAS_analysis 
 ## Table of Contents
 
 - [Snow DSM Correction (uas_snow_correction.py)](#snow-dsm-correction)
+- [Snow Height Calculation (uas_snow_height_calculator.py)](#snow-height-calculation)
 - [Standalone Validation (uas_validation.py)](#standalone-validation)
 - [Configuration File (config.yaml)](#configuration-file)
 - [Common Workflows](#common-workflows)
@@ -90,12 +91,9 @@ Generated in `outputs/{aoi_name}/`:
 
 ```
 corrected/
-  ├── {filename}_Tier1_DSM.tif          # PPK-only corrected DSM
-  ├── {filename}_Tier1_snowHeight.tif   # Snow depth from Tier 1
-  ├── {filename}_Tier2_DSM.tif          # Vertical shift corrected DSM
-  ├── {filename}_Tier2_snowHeight.tif   # Snow depth from Tier 2
-  ├── {filename}_Tier3_DSM.tif          # Planar trend corrected DSM
-  └── {filename}_Tier3_snowHeight.tif   # Snow depth from Tier 3
+  ├── {filename}_noCorr_DSM.tif         # Tier 1 (PPK-only) corrected DSM
+  ├── {filename}_VSC_DSM.tif            # Tier 2 (Vertical Shift) corrected DSM
+  └── {filename}_PTC_DSM.tif            # Tier 3 (Planar Trend) corrected DSM
 
 statistics/
   ├── {filename}_statistics.csv         # Summary statistics (RMSE, ME, etc.)
@@ -103,8 +101,8 @@ statistics/
   └── batch_summary.csv                 # Batch processing summary
 
 plots/
-  ├── {filename}_residuals.png          # Per-point residuals visualization
-  └── {filename}_bootstrap.png          # Bootstrap distribution
+  ├── {filename}_residual_comparison.png  # Point-by-point before vs after
+  └── {filename}_tier_comparison.png      # Bar chart comparing tier RMSE
 ```
 
 **Note on Output Files:** 
@@ -113,6 +111,73 @@ plots/
 - Only tiers that were evaluated will have corresponding residual columns in the point residuals CSV
 
 ---
+
+
+---
+
+## Snow Height Calculation
+
+Script for calculating snow depth by subtracting bare ground DSM from corrected snow-on DSMs. Uses ArcPy Raster Calculator for proper raster alignment. This script must be run from ArcGIS Pro Python Command Prompt.
+
+### Basic Syntax
+
+```bash
+python uas_snow_height_calculator.py --config <config_file> [OPTIONS]
+```
+
+### Required Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `--config CONFIG` | Path to YAML configuration file |
+
+### Optional Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--aoi AOI_NAME` | Override AOI name from config | Uses config value |
+| `--verbose` | Enable detailed logging output | INFO level |
+
+### Examples
+
+```bash
+# Basic snow depth calculation
+python uas_snow_height_calculator.py --config config.yaml
+
+# Override AOI name
+python uas_snow_height_calculator.py --config config.yaml --aoi SiteB
+
+# Verbose output
+python uas_snow_height_calculator.py --config config.yaml --verbose
+```
+
+### How to Run
+
+1. Open ArcGIS Pro
+2. Open Python Command Prompt:
+   - Method 1: Project tab -> Python -> Python Command Prompt
+   - Method 2: Windows start menu -> Search "Python Command Prompt (ArcGIS Pro)"
+3. Navigate to your project directory:
+   ```bash
+   cd path\to\SNOWPACK_UAS_analysis
+   ```
+4. Run the script:
+   ```bash
+   python uas_snow_height_calculator.py --config config.yaml
+   ```
+
+### Output Files
+
+Generated in `outputs/{aoi_name}/snowHeight/`:
+
+```
+snowHeight/
+  ├── {filename}_noCorr_snowHeight.tif    # Snow depth from Tier 1
+  ├── {filename}_VSC_snowHeight.tif       # Snow depth from Tier 2
+  └── {filename}_PTC_snowHeight.tif       # Snow depth from Tier 3
+```
+
+**Note:** The script automatically processes all corrected DSMs found in the `outputs/{aoi_name}/corrected/` folder. Output file extension is always `.tif` regardless of input extension.
 
 ## Standalone Validation
 
@@ -470,8 +535,8 @@ thresholds:
 # Step 2: Run correction (includes validation automatically)
 python uas_snow_correction.py --config config.yaml
 
-# Note: Validation (LOO + Bootstrap) is automatically included in uas_snow_correction.py
-# No need to run uas_validation.py unless you want to re-validate with different parameters
+# Step 3: Calculate snow depth (run in ArcGIS Pro Python Command Prompt)
+python uas_snow_height_calculator.py --config config.yaml
 ```
 
 ### Workflow 2: Batch Processing Multiple DSMs
@@ -485,7 +550,8 @@ python uas_snow_correction.py --config config.yaml
 # Step 2: Run batch correction (includes validation for each DSM)
 python uas_snow_correction.py --config config.yaml --batch
 
-# Note: Each DSM is automatically validated during correction
+# Step 3: Calculate snow depth for all corrected DSMs (run in ArcGIS Pro Python Command Prompt)
+python uas_snow_height_calculator.py --config config.yaml
 ```
 
 ### Workflow 3: Using Standalone Validation Tool
@@ -523,8 +589,14 @@ python uas_validation.py \
 
 python uas_snow_correction.py --config config.yaml --batch
 
+# Calculate snow depth (run in ArcGIS Pro Python Command Prompt)
+python uas_snow_height_calculator.py --config config.yaml
+
 # Method 2: Use command-line flag
 python uas_snow_correction.py --config config.yaml --batch --no-bootstrap
+
+# Calculate snow depth (run in ArcGIS Pro Python Command Prompt)
+python uas_snow_height_calculator.py --config config.yaml
 ```
 
 ### Workflow 5: Debugging and Troubleshooting
@@ -547,13 +619,18 @@ python uas_validation.py \
 ```bash
 # Process Site A
 python uas_snow_correction.py --config config_siteA.yaml --batch
+python uas_snow_height_calculator.py --config config_siteA.yaml  # Run in ArcGIS Pro
 
 # Process Site B
 python uas_snow_correction.py --config config_siteB.yaml --batch
+python uas_snow_height_calculator.py --config config_siteB.yaml  # Run in ArcGIS Pro
 
 # Or use AOI override with single config
 python uas_snow_correction.py --config config.yaml --aoi SiteA --batch
+python uas_snow_height_calculator.py --config config.yaml --aoi SiteA  # Run in ArcGIS Pro
+
 python uas_snow_correction.py --config config.yaml --aoi SiteB --batch
+python uas_snow_height_calculator.py --config config.yaml --aoi SiteB  # Run in ArcGIS Pro
 ```
 
 ### Workflow 7: Manual Tier Selection
@@ -585,6 +662,9 @@ python uas_snow_correction.py --config config.yaml
 | `uas_snow_correction.py` | `--config FILE` | Specify config file (required) |
 | | `--batch` | Enable batch processing |
 | | `--no-bootstrap` | Skip bootstrap analysis |
+| | `--aoi NAME` | Override AOI name |
+| | `--verbose` | Detailed logging |
+| `uas_snow_height_calculator.py` | `--config FILE` | Specify config file (required) |
 | | `--aoi NAME` | Override AOI name |
 | | `--verbose` | Detailed logging |
 | `uas_validation.py` | `--bare FILE` | Bare-ground DSM (required) |
